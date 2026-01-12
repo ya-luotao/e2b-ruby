@@ -1,5 +1,7 @@
 # E2B Ruby SDK
 
+> **⚠️ Disclaimer:** This is an **unofficial** community-maintained SDK and is not affiliated with, endorsed by, or supported by E2B. For official SDKs, please visit [E2B's official documentation](https://e2b.dev/docs).
+
 Unofficial Ruby SDK for [E2B](https://e2b.dev) - secure cloud sandboxes for AI-generated code execution.
 
 ## Features
