@@ -1,0 +1,32 @@
+# Gem files
+*.gem
+pkg/
+
+# Ruby/Bundler
+/.bundle/
+/vendor/bundle
+Gemfile.lock
+
+# Test/spec artifacts
+/coverage/
+/spec/reports/
+
+# RSpec
+.rspec_status
+
+# VCR cassettes (may contain API keys)
+spec/cassettes/
+
+# IDE
+.idea/
+*.swp
+*.swo
+.vscode/
+
+# macOS
+.DS_Store
+
+# Environment files (may contain API keys)
+.env
+.env.local
+.envrc
