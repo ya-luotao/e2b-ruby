@@ -18,7 +18,7 @@ Unofficial Ruby SDK for [E2B](https://e2b.dev) - secure cloud sandboxes for AI-g
 Add to your Gemfile:
 
 ```ruby
-gem 'e2b', git: 'https://github.com/your-org/e2b-ruby.git'
+gem 'e2b', git: 'https://github.com/ya-luotao/e2b-ruby.git'
 # or from local path
 gem 'e2b', path: '../e2b-ruby'
 ```
