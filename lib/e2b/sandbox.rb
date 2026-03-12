@@ -91,10 +91,11 @@ module E2B
       #   sandbox = E2B::Sandbox.create(template: "base")
       #   sandbox = E2B::Sandbox.create(template: "python", timeout: 600)
       def create(template: "base", timeout: DEFAULT_TIMEOUT, metadata: nil,
-                 envs: nil, api_key: nil, domain: DEFAULT_DOMAIN,
+                 envs: nil, api_key: nil, domain: nil,
                  request_timeout: 120)
         api_key = resolve_api_key(api_key)
-        http_client = build_http_client(api_key)
+        domain = resolve_domain(domain)
+        http_client = build_http_client(api_key, domain: domain)
 
         body = {
           templateID: template,
@@ -120,9 +121,10 @@ module E2B
       # @param api_key [String, nil] API key
       # @param domain [String] E2B domain
       # @return [Sandbox] The sandbox instance
-      def connect(sandbox_id, timeout: nil, api_key: nil, domain: DEFAULT_DOMAIN)
+      def connect(sandbox_id, timeout: nil, api_key: nil, domain: nil)
         api_key = resolve_api_key(api_key)
-        http_client = build_http_client(api_key)
+        domain = resolve_domain(domain)
+        http_client = build_http_client(api_key, domain: domain)
 
         if timeout
           response = http_client.post("/sandboxes/#{sandbox_id}/connect",
@@ -190,8 +192,12 @@ module E2B
         key
       end
 
-      def build_http_client(api_key)
-        base_url = E2B.configuration&.api_url || Configuration::DEFAULT_API_URL
+      def resolve_domain(domain)
+        domain || E2B.configuration&.domain || ENV["E2B_DOMAIN"] || DEFAULT_DOMAIN
+      end
+
+      def build_http_client(api_key, domain: nil)
+        base_url = E2B.configuration&.api_url || ENV["E2B_API_URL"] || "https://api.#{domain || DEFAULT_DOMAIN}"
         API::HttpClient.new(base_url: base_url, api_key: api_key)
       end
     end

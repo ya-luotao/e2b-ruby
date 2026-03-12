@@ -90,7 +90,7 @@ module E2B
       @api_key = api_key || ENV["E2B_API_KEY"]
       @access_token = access_token || ENV["E2B_ACCESS_TOKEN"]
       @domain = domain || ENV["E2B_DOMAIN"] || DEFAULT_DOMAIN
-      @api_url = api_url || ENV["E2B_API_URL"] || DEFAULT_API_URL
+      @api_url = api_url || ENV["E2B_API_URL"] || "https://api.#{@domain}"
       @request_timeout = request_timeout
       @timeout_ms = timeout_ms
       @sandbox_timeout_ms = sandbox_timeout_ms
