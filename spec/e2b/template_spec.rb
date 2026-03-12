@@ -358,6 +358,72 @@ RSpec.describe E2B::Template do
         )
       end
     end
+
+    it "serializes package installers, git clone, and leaves empty env hashes as no-ops" do
+      template = described_class.new
+        .from_base_image
+        .set_envs({})
+        .pip_install(["numpy", "pandas"], g: false)
+        .npm_install("typescript", g: true)
+        .bun_install("tsx", dev: true)
+        .apt_install(%w[git curl], no_install_recommends: true)
+        .git_clone("https://github.com/e2b-dev/E2B.git", "/app/repo", branch: "main", depth: 1, user: "root")
+
+      expect(template.to_h[:steps]).to eq([
+        { type: "RUN", args: ["pip install --user numpy pandas", ""], force: false },
+        { type: "RUN", args: ["npm install -g typescript", "root"], force: false },
+        { type: "RUN", args: ["bun install --dev tsx", ""], force: false },
+        {
+          type: "RUN",
+          args: [
+            "apt-get update && DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y --no-install-recommends git curl",
+            "root"
+          ],
+          force: false
+        },
+        {
+          type: "RUN",
+          args: [
+            "git clone https://github.com/e2b-dev/E2B.git --branch main --single-branch --depth 1 /app/repo",
+            "root"
+          ],
+          force: false
+        }
+      ])
+    end
+
+    it "guards MCP server helpers to the mcp-gateway template" do
+      template = described_class.new.from_base_image
+
+      expect {
+        template.add_mcp_server("exa")
+      }.to raise_error(E2B::BuildError, /MCP servers can only be added to mcp-gateway template/)
+    end
+
+    it "serializes MCP and devcontainer helpers on the matching templates" do
+      mcp_template = described_class.new
+        .from_template("mcp-gateway")
+        .add_mcp_server(%w[exa brave])
+      devcontainer_template = described_class.new
+        .from_template("devcontainer")
+        .beta_dev_container_prebuild("/workspace/project")
+        .beta_set_devcontainer_start("/workspace/project")
+
+      expect(mcp_template.to_h).to include(
+        fromTemplate: "mcp-gateway",
+        steps: [
+          { type: "RUN", args: ["mcp-gateway pull exa brave", "root"], force: false }
+        ]
+      )
+      expect(devcontainer_template.to_h).to include(
+        fromTemplate: "devcontainer",
+        readyCmd: "test -f /devcontainer.up",
+        startCmd: "sudo devcontainer up --workspace-folder /workspace/project && sudo /prepare-exec.sh /workspace/project | sudo tee /devcontainer.sh > /dev/null && sudo chmod +x /devcontainer.sh && sudo touch /devcontainer.up"
+      )
+      expect(devcontainer_template.to_h[:steps]).to eq([
+        { type: "RUN", args: ["devcontainer build --workspace-folder /workspace/project", "root"], force: false }
+      ])
+    end
   end
 
   describe ".build_in_background" do

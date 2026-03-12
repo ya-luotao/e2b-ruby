@@ -495,6 +495,8 @@ module E2B
     end
 
     def set_envs(envs)
+      return self if envs.empty?
+
       args = envs.each_with_object([]) do |(key, value), values|
         values << key.to_s
         values << value.to_s
@@ -507,6 +509,77 @@ module E2B
       }
       self
     end
+
+    def pip_install(packages = nil, g: true)
+      package_list = packages.nil? ? nil : Array(packages).map(&:to_s)
+      args = ["pip", "install"]
+      args << "--user" unless g
+      args.concat(package_list || ["."])
+      run_cmd(args.join(" "), user: g ? "root" : nil)
+    end
+
+    def npm_install(packages = nil, g: false, dev: false)
+      package_list = packages.nil? ? nil : Array(packages).map(&:to_s)
+      args = ["npm", "install"]
+      args << "-g" if g
+      args << "--save-dev" if dev
+      args.concat(package_list) if package_list
+      run_cmd(args.join(" "), user: g ? "root" : nil)
+    end
+
+    def bun_install(packages = nil, g: false, dev: false)
+      package_list = packages.nil? ? nil : Array(packages).map(&:to_s)
+      args = ["bun", "install"]
+      args << "-g" if g
+      args << "--dev" if dev
+      args.concat(package_list) if package_list
+      run_cmd(args.join(" "), user: g ? "root" : nil)
+    end
+
+    def apt_install(packages, no_install_recommends: false)
+      package_list = Array(packages).map(&:to_s)
+      install_flags = no_install_recommends ? "--no-install-recommends " : ""
+      run_cmd(
+        [
+          "apt-get update",
+          "DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y #{install_flags}#{package_list.join(' ')}"
+        ],
+        user: "root"
+      )
+    end
+
+    def add_mcp_server(servers)
+      raise BuildError, "MCP servers can only be added to mcp-gateway template" unless @base_template == "mcp-gateway"
+
+      server_list = Array(servers).map(&:to_s)
+      run_cmd("mcp-gateway pull #{server_list.join(' ')}", user: "root")
+    end
+
+    def git_clone(url, path = nil, branch: nil, depth: nil, user: nil)
+      args = ["git", "clone", url.to_s]
+      if branch
+        args << "--branch #{branch}"
+        args << "--single-branch"
+      end
+      args << "--depth #{depth}" if depth
+      args << path.to_s if path
+      run_cmd(args.join(" "), user: user)
+    end
+
+    def beta_dev_container_prebuild(devcontainer_directory)
+      ensure_devcontainer_template!
+      run_cmd("devcontainer build --workspace-folder #{devcontainer_directory}", user: "root")
+    end
+
+    def beta_set_dev_container_start(devcontainer_directory)
+      ensure_devcontainer_template!
+      set_start_cmd(
+        "sudo devcontainer up --workspace-folder #{devcontainer_directory} && sudo /prepare-exec.sh #{devcontainer_directory} | sudo tee /devcontainer.sh > /dev/null && sudo chmod +x /devcontainer.sh && sudo touch /devcontainer.up",
+        "test -f /devcontainer.up"
+      )
+    end
+
+    alias beta_set_devcontainer_start beta_set_dev_container_start
 
     def remove(path, force: false, recursive: false, user: nil)
       args = ["rm"]
@@ -757,6 +830,12 @@ module E2B
       return value unless value.nil? && required
 
       raise KeyError, "Missing copy_items value for #{key}"
+    end
+
+    def ensure_devcontainer_template!
+      return if @base_template == "devcontainer"
+
+      raise BuildError, "Devcontainers can only used in the devcontainer template"
     end
   end
 end
