@@ -40,7 +40,7 @@ RSpec.describe E2B::Services::Filesystem do
     it "returns WriteInfo built from the upload response" do
       expect(filesystem).to receive(:rest_upload)
         .with(
-          "https://49983-sbx_123.custom.e2b.test/files?path=%2Ftmp%2Fout.txt&username=user",
+          "https://49983-sbx_123.custom.e2b.test/files?path=%2Ftmp%2Fout.txt",
           "payload",
           timeout: 120
         )
@@ -103,6 +103,19 @@ RSpec.describe E2B::Services::Filesystem do
       expect(handle.get_new_events).to eq([])
       handle.stop
       expect(handle).to be_stopped
+    end
+
+    it "raises TemplateError when recursive watching is requested on unsupported envd versions" do
+      old_filesystem = described_class.new(
+        sandbox_id: "sbx_123",
+        sandbox_domain: "custom.e2b.test",
+        api_key: "api-key",
+        access_token: "envd-token",
+        envd_version: "0.1.3"
+      )
+
+      expect { old_filesystem.watch_dir("/tmp", recursive: true) }
+        .to raise_error(E2B::TemplateError, /update the template to use recursive watching/)
     end
   end
 end

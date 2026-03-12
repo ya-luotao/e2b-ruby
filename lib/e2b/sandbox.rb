@@ -459,6 +459,7 @@ module E2B
     # @param user [String, nil] Username context
     # @return [String] Download URL
     def download_url(path, user: nil, use_signature_expiration: nil)
+      user = resolve_legacy_file_user(user)
       query = build_file_url_query(
         path: path,
         user: user,
@@ -475,6 +476,7 @@ module E2B
     # @param user [String, nil] Username context
     # @return [String] Upload URL
     def upload_url(path = nil, user: nil, use_signature_expiration: nil)
+      user = resolve_legacy_file_user(user)
       base = "https://#{Services::BaseService::ENVD_PORT}-#{@sandbox_id}.#{@domain}/files"
       query = build_file_url_query(
         path: path,
@@ -552,7 +554,8 @@ module E2B
         sandbox_id: @sandbox_id,
         sandbox_domain: @domain,
         api_key: @api_key,
-        access_token: @envd_access_token
+        access_token: @envd_access_token,
+        envd_version: @envd_version
       }
 
       @commands = Services::Commands.new(**service_opts)
@@ -571,6 +574,22 @@ module E2B
       Time.parse(value)
     rescue ArgumentError
       nil
+    end
+
+    def resolve_legacy_file_user(user)
+      return user unless user.nil? || user.to_s.empty?
+
+      return Services::BaseService::DEFAULT_USERNAME if legacy_default_user?
+
+      nil
+    end
+
+    def legacy_default_user?
+      return false if @envd_version.nil? || @envd_version.to_s.empty?
+
+      Gem::Version.new(@envd_version) < Services::BaseService::ENVD_DEFAULT_USER_VERSION
+    rescue ArgumentError
+      false
     end
 
     def build_file_url_query(path:, user:, operation:, use_signature_expiration:)

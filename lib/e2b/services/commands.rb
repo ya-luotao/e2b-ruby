@@ -175,6 +175,7 @@ module E2B
         build_live_handle(
           rpc_method: "Connect",
           body: { process: { pid: pid } },
+          headers: user_auth_headers(nil),
           timeout: request_timeout || (timeout + 30)
         )
       end

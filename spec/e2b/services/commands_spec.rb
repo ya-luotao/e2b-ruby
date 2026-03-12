@@ -70,7 +70,7 @@ RSpec.describe E2B::Services::Commands do
       allow(commands).to receive(:envd_rpc) do |_service, _method, body:, timeout:, headers:, on_event:|
         expect(body).to eq(process: { cmd: "/bin/bash", args: ["-l", "-c", "run me"] })
         expect(timeout).to eq(31)
-        expect(headers).to eq({})
+        expect(headers).to be_nil
 
         on_event.call(
           stdout: "hello",
@@ -207,6 +207,42 @@ RSpec.describe E2B::Services::Commands do
 
       expect(chunks).to eq([["reconnected", nil, nil]])
       expect(handle.wait.stdout).to eq("reconnected")
+    end
+  end
+
+  describe "legacy envd user defaults" do
+    it "sends the default user header when running commands on older envd versions" do
+      old_commands = described_class.new(
+        sandbox_id: "sbx_123",
+        sandbox_domain: "e2b.app",
+        api_key: "api-key",
+        envd_version: "0.3.9"
+      )
+
+      expect(old_commands).to receive(:envd_rpc)
+        .with(
+          "process.Process",
+          "Start",
+          body: {
+            process: {
+              cmd: "/bin/bash",
+              args: ["-l", "-c", "echo hi"]
+            }
+          },
+          timeout: 90,
+          headers: { "Authorization" => "Basic #{Base64.strict_encode64("user:")}" },
+          on_event: nil
+        )
+        .and_return(
+          stdout: "hi\n",
+          stderr: "",
+          exit_code: 0,
+          events: [{ "event" => { "End" => { "exitCode" => 0 } } }]
+        )
+
+      result = old_commands.run("echo hi", timeout: 60)
+
+      expect(result.stdout).to eq("hi\n")
     end
   end
 

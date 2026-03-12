@@ -449,6 +449,21 @@ RSpec.describe E2B::Sandbox do
         .to eq("https://49983-sbx_123.custom.e2b.test/files?path=%2Ftmp%2Fmy+file.txt&username=dev+user")
     end
 
+    it "uses the default username in file URLs for older envd versions" do
+      legacy_sandbox = described_class.new(
+        sandbox_data: {
+          "sandboxID" => "sbx_123",
+          "envdVersion" => "0.3.9"
+        },
+        http_client: http_client,
+        api_key: "api-key",
+        domain: "custom.e2b.test"
+      )
+
+      expect(legacy_sandbox.download_url("/tmp/my file.txt"))
+        .to eq("https://49983-sbx_123.custom.e2b.test/files?path=%2Ftmp%2Fmy+file.txt&username=user")
+    end
+
     it "signs file URLs for secured sandboxes" do
       secure_sandbox = described_class.new(
         sandbox_data: {

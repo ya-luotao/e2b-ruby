@@ -25,8 +25,6 @@ module E2B
     #   entries = sandbox.files.list("/home/user")
     class Filesystem < BaseService
       # Default username for file operations
-      DEFAULT_USER = "user"
-
       # Read file content
       #
       # @param path [String] File path in the sandbox
@@ -37,7 +35,7 @@ module E2B
       #
       # @example
       #   content = sandbox.files.read("/home/user/config.json")
-      def read(path, format: "text", user: DEFAULT_USER, request_timeout: 120)
+      def read(path, format: "text", user: nil, request_timeout: 120)
         url = build_file_url("/files", path: path, user: user)
         response = rest_get(url, timeout: request_timeout)
 
@@ -63,7 +61,7 @@ module E2B
       #
       # @example
       #   sandbox.files.write("/home/user/output.txt", "Hello, World!")
-      def write(path, data, user: DEFAULT_USER, request_timeout: 120)
+      def write(path, data, user: nil, request_timeout: 120)
         url = build_file_url("/files", path: path, user: user)
         content = data.is_a?(IO) || data.respond_to?(:read) ? data.read : data.to_s
         result = rest_upload(url, content, timeout: request_timeout)
@@ -82,7 +80,7 @@ module E2B
       #     { path: "/home/user/a.txt", data: "Content A" },
       #     { path: "/home/user/b.txt", data: "Content B" }
       #   ])
-      def write_files(files, user: DEFAULT_USER, request_timeout: 120)
+      def write_files(files, user: nil, request_timeout: 120)
         files.map do |file|
           write(file[:path], file[:data] || file[:content], user: user, request_timeout: request_timeout)
         end
@@ -99,7 +97,7 @@ module E2B
       # @example
       #   entries = sandbox.files.list("/home/user")
       #   entries.each { |e| puts "#{e.name} (#{e.type})" }
-      def list(path, depth: 1, user: DEFAULT_USER, request_timeout: 60)
+      def list(path, depth: 1, user: nil, request_timeout: 60)
         response = envd_rpc("filesystem.Filesystem", "ListDir",
           body: { path: path, depth: depth },
           timeout: request_timeout,
@@ -115,7 +113,7 @@ module E2B
       # @param user [String] Username context
       # @param request_timeout [Integer] Request timeout in seconds
       # @return [Boolean]
-      def exists?(path, user: DEFAULT_USER, request_timeout: 30)
+      def exists?(path, user: nil, request_timeout: 30)
         get_info(path, user: user, request_timeout: request_timeout)
         true
       rescue E2B::NotFoundError, E2B::E2BError
@@ -128,7 +126,7 @@ module E2B
       # @param user [String] Username context
       # @param request_timeout [Integer] Request timeout in seconds
       # @return [Models::EntryInfo] File/directory info
-      def get_info(path, user: DEFAULT_USER, request_timeout: 30)
+      def get_info(path, user: nil, request_timeout: 30)
         response = envd_rpc("filesystem.Filesystem", "Stat",
           body: { path: path },
           timeout: request_timeout,
@@ -143,7 +141,7 @@ module E2B
       # @param path [String] Path to remove
       # @param user [String] Username context
       # @param request_timeout [Integer] Request timeout in seconds
-      def remove(path, user: DEFAULT_USER, request_timeout: 30)
+      def remove(path, user: nil, request_timeout: 30)
         envd_rpc("filesystem.Filesystem", "Remove",
           body: { path: path },
           timeout: request_timeout,
@@ -157,7 +155,7 @@ module E2B
       # @param user [String] Username context
       # @param request_timeout [Integer] Request timeout in seconds
       # @return [Models::EntryInfo] Info about the moved entry
-      def rename(old_path, new_path, user: DEFAULT_USER, request_timeout: 30)
+      def rename(old_path, new_path, user: nil, request_timeout: 30)
         response = envd_rpc("filesystem.Filesystem", "Move",
           body: { source: old_path, destination: new_path },
           timeout: request_timeout,
@@ -173,7 +171,7 @@ module E2B
       # @param user [String] Username context
       # @param request_timeout [Integer] Request timeout in seconds
       # @return [Boolean] true if created successfully
-      def make_dir(path, user: DEFAULT_USER, request_timeout: 30)
+      def make_dir(path, user: nil, request_timeout: 30)
         envd_rpc("filesystem.Filesystem", "MakeDir",
           body: { path: path },
           timeout: request_timeout,
@@ -197,7 +195,12 @@ module E2B
       #   events = handle.get_new_events
       #   events.each { |e| puts "#{e.type}: #{e.name}" }
       #   handle.stop
-      def watch_dir(path, recursive: false, user: DEFAULT_USER, request_timeout: 30)
+      def watch_dir(path, recursive: false, user: nil, request_timeout: 30)
+        if recursive && !supports_recursive_watch?
+          raise E2B::TemplateError,
+            "You need to update the template to use recursive watching. You can do this by running `e2b template build` in the directory with the template."
+        end
+
         response = envd_rpc("filesystem.Filesystem", "CreateWatcher",
           body: { path: path, recursive: recursive },
           timeout: request_timeout,
@@ -231,6 +234,7 @@ module E2B
 
       # Build URL for file operations
       def build_file_url(endpoint, path: nil, user: nil)
+        user = resolve_username(user)
         base = "https://#{ENVD_PORT}-#{@sandbox_id}.#{@sandbox_domain}"
         url = "#{base}#{endpoint}"
         params = []

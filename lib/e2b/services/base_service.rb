@@ -4,6 +4,7 @@ require "base64"
 require "net/http"
 require "openssl"
 require "ostruct"
+require "rubygems/version"
 
 module E2B
   module Services
@@ -15,17 +16,21 @@ module E2B
     class BaseService
       # Default envd port
       ENVD_PORT = 49983
+      DEFAULT_USERNAME = "user"
+      ENVD_DEFAULT_USER_VERSION = Gem::Version.new("0.4.0")
+      ENVD_RECURSIVE_WATCH_VERSION = Gem::Version.new("0.1.4")
 
       # @param sandbox_id [String] Sandbox ID
       # @param sandbox_domain [String] Sandbox domain (e.g., "e2b.app")
       # @param api_key [String] API key for authentication
       # @param access_token [String, nil] Sandbox-specific access token
       # @param logger [Logger, nil] Optional logger
-      def initialize(sandbox_id:, sandbox_domain:, api_key:, access_token: nil, logger: nil)
+      def initialize(sandbox_id:, sandbox_domain:, api_key:, access_token: nil, envd_version: nil, logger: nil)
         @sandbox_id = sandbox_id
         @sandbox_domain = sandbox_domain
         @api_key = api_key
         @access_token = access_token
+        @envd_version = envd_version
         @logger = logger
         @envd_client = nil
       end
@@ -67,10 +72,34 @@ module E2B
       end
 
       def user_auth_headers(user)
-        return {} if user.nil? || user.to_s.empty?
+        resolved_user = resolve_username(user)
+        return nil if resolved_user.nil? || resolved_user.to_s.empty?
 
-        encoded = Base64.strict_encode64("#{user}:")
+        encoded = Base64.strict_encode64("#{resolved_user}:")
         { "Authorization" => "Basic #{encoded}" }
+      end
+
+      def resolve_username(user)
+        return user unless user.nil? || user.to_s.empty?
+        return DEFAULT_USERNAME if legacy_default_user?
+
+        nil
+      end
+
+      def legacy_default_user?
+        return false if @envd_version.nil? || @envd_version.to_s.empty?
+
+        Gem::Version.new(@envd_version) < ENVD_DEFAULT_USER_VERSION
+      rescue ArgumentError
+        false
+      end
+
+      def supports_recursive_watch?
+        return true if @envd_version.nil? || @envd_version.to_s.empty?
+
+        Gem::Version.new(@envd_version) >= ENVD_RECURSIVE_WATCH_VERSION
+      rescue ArgumentError
+        true
       end
 
       private

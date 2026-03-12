@@ -129,6 +129,7 @@ module E2B
         build_live_handle(
           rpc_method: "Connect",
           body: body,
+          headers: user_auth_headers(nil),
           timeout: timeout + 30
         )
       end
