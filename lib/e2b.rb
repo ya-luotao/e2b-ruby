@@ -13,8 +13,14 @@ require_relative "e2b/api/http_client"
 require_relative "e2b/paginator"
 
 # Models
+require_relative "e2b/models/build_info"
+require_relative "e2b/models/build_status_reason"
 require_relative "e2b/models/sandbox_info"
 require_relative "e2b/models/snapshot_info"
+require_relative "e2b/models/template_build_status_response"
+require_relative "e2b/models/template_log_entry"
+require_relative "e2b/models/template_tag"
+require_relative "e2b/models/template_tag_info"
 require_relative "e2b/models/process_result"
 require_relative "e2b/models/entry_info"
 
@@ -30,6 +36,7 @@ require_relative "e2b/services/git"
 # Core classes
 require_relative "e2b/sandbox"
 require_relative "e2b/client"
+require_relative "e2b/template"
 
 # E2B SDK for Ruby
 #

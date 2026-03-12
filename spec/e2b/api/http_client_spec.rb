@@ -116,4 +116,18 @@ RSpec.describe E2B::API::HttpClient do
         .to raise_error(E2B::E2BError, /Connection failed: connection refused/)
     end
   end
+
+  describe "#delete" do
+    it "sends JSON bodies when provided" do
+      stub_request(:delete, "#{base_url}/templates/tags")
+        .with(body: { name: "my-template", tags: ["stable"] }.to_json)
+        .to_return(
+          status: 204,
+          body: "",
+          headers: { "Content-Type" => "application/json" }
+        )
+
+      expect(client.delete("/templates/tags", body: { name: "my-template", tags: ["stable"] })).to be_nil
+    end
+  end
 end

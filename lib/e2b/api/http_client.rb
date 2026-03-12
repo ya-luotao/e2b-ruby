@@ -80,11 +80,13 @@ module E2B
       # Perform a DELETE request
       #
       # @param path [String] API endpoint path
+      # @param body [Hash, nil] Request body
       # @param timeout [Integer] Request timeout in seconds
       # @return [Hash, Array, String, nil] Parsed response body
-      def delete(path, timeout: DEFAULT_TIMEOUT, detailed: false)
+      def delete(path, body: nil, timeout: DEFAULT_TIMEOUT, detailed: false)
         handle_response(detailed: detailed) do
           @connection.delete(normalize_path(path)) do |req|
+            req.body = body.to_json if body
             req.options.timeout = timeout
           end
         end

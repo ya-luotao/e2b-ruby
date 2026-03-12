@@ -51,6 +51,9 @@ module E2B
   # Error raised for template-related failures
   class TemplateError < E2BError; end
 
+  # Error raised when a template build fails or returns an invalid status
+  class BuildError < E2BError; end
+
   # Error raised when a command exits with non-zero exit code
   #
   # @attr_reader [String] stdout Command stdout output
