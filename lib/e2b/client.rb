@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "rubygems/version"
+
 module E2B
   # Client for interacting with the E2B API
   #
@@ -75,6 +77,7 @@ module E2B
       end
 
       response = @http_client.post("/sandboxes", body: body, timeout: request_timeout || @config.request_timeout || 120)
+      ensure_supported_envd_version!(response)
 
       sandbox = Sandbox.new(
         sandbox_data: response,
@@ -253,6 +256,24 @@ module E2B
         user: "root",
         envs: { "GATEWAY_ACCESS_TOKEN" => token }
       )
+    end
+
+    def ensure_supported_envd_version!(response)
+      envd_version = response["envdVersion"] || response["envd_version"] || response[:envdVersion]
+      return if envd_version.nil?
+      return unless Gem::Version.new(envd_version) < Gem::Version.new("0.1.0")
+
+      sandbox_id = response["sandboxID"] || response["sandbox_id"] || response[:sandboxID]
+      begin
+        @http_client.delete("/sandboxes/#{sandbox_id}") if sandbox_id
+      rescue NotFoundError
+        nil
+      end
+
+      raise TemplateError,
+        "You need to update the template to use the new SDK. You can do this by running `e2b template build` in the directory with the template."
+    rescue ArgumentError
+      nil
     end
 
     def resolve_config(config_or_options)

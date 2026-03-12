@@ -167,6 +167,27 @@ RSpec.describe E2B::Sandbox do
 
       expect(sandbox.sandbox_id).to eq("sbx_123")
     end
+
+    it "kills unsupported templates and raises TemplateError for old envd versions" do
+      expect(E2B::API::HttpClient).to receive(:new).and_return(http_client)
+      allow(http_client).to receive(:post)
+        .with(
+          "/sandboxes",
+          body: {
+            templateID: "base",
+            timeout: 300,
+            secure: true,
+            allow_internet_access: true,
+            autoPause: false
+          },
+          timeout: 120
+        )
+        .and_return({ "sandboxID" => "sbx_123", "envdVersion" => "0.0.9" })
+      expect(http_client).to receive(:delete).with("/sandboxes/sbx_123")
+
+      expect { described_class.create(api_key: "api-key") }
+        .to raise_error(E2B::TemplateError, /update the template to use the new SDK/)
+    end
   end
 
   describe ".connect" do

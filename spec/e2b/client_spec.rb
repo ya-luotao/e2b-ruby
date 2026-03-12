@@ -180,6 +180,28 @@ RSpec.describe E2B::Client do
 
       expect(sandbox.get_mcp_url).to eq("https://50005-sbx_123.e2b.app/mcp")
     end
+
+    it "kills unsupported templates and raises TemplateError for old envd versions" do
+      allow(http_client).to receive(:post)
+        .with(
+          "/sandboxes",
+          body: {
+            templateID: "base",
+            timeout: 300,
+            secure: true,
+            allow_internet_access: true,
+            autoPause: false
+          },
+          timeout: 60
+        )
+        .and_return({ "sandboxID" => "sbx_123", "envdVersion" => "0.0.9" })
+      expect(http_client).to receive(:delete).with("/sandboxes/sbx_123")
+
+      client = described_class.new(api_key: "api-key")
+
+      expect { client.create }
+        .to raise_error(E2B::TemplateError, /update the template to use the new SDK/)
+    end
   end
 
   describe "#connect" do
