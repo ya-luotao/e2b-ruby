@@ -1,29 +1,33 @@
 # frozen_string_literal: true
 
+require "time"
+require "securerandom"
+
 module E2B
   # Represents an E2B Sandbox instance
   #
-  # A Sandbox is an isolated cloud environment that can be used to
-  # run code, execute commands, and manage files securely.
+  # A Sandbox is an isolated cloud environment for running code, executing
+  # commands, and managing files securely. Create sandboxes using class methods
+  # or through {E2B::Client}.
   #
-  # @example Basic usage
-  #   sandbox = client.create(template: "base")
+  # @example Create and use a sandbox
+  #   sandbox = E2B::Sandbox.create(template: "base", api_key: "your-key")
   #
-  #   # Execute commands
   #   result = sandbox.commands.run("echo 'Hello'")
   #   puts result.stdout
   #
-  #   # Work with files
   #   sandbox.files.write("/home/user/hello.txt", "Hello!")
-  #
-  #   # Keep alive
-  #   sandbox.set_timeout(3600_000)  # 1 hour
-  #
-  #   # Clean up
   #   sandbox.kill
+  #
+  # @example Connect to an existing sandbox
+  #   sandbox = E2B::Sandbox.connect("sandbox-id", api_key: "your-key")
+  #   sandbox.commands.run("ls")
   class Sandbox
     # Default domain for E2B sandboxes
     DEFAULT_DOMAIN = "e2b.app"
+
+    # Default sandbox timeout in seconds
+    DEFAULT_TIMEOUT = 300
 
     # @return [String] Unique sandbox ID
     attr_reader :sandbox_id
@@ -61,9 +65,144 @@ module E2B
     # @return [Services::Filesystem] Filesystem service
     attr_reader :files
 
+    # @return [Services::Pty] PTY (pseudo-terminal) service
+    attr_reader :pty
+
+    # @return [Services::Git] Git operations service
+    attr_reader :git
+
+    # -------------------------------------------------------------------
+    # Class methods (matching official SDK pattern)
+    # -------------------------------------------------------------------
+
+    class << self
+      # Create a new sandbox
+      #
+      # @param template [String] Template ID or alias (default: "base")
+      # @param timeout [Integer] Sandbox timeout in seconds (default: 300)
+      # @param metadata [Hash, nil] Custom metadata key-value pairs
+      # @param envs [Hash{String => String}, nil] Environment variables
+      # @param api_key [String, nil] API key (defaults to E2B_API_KEY env var)
+      # @param domain [String] E2B domain
+      # @param request_timeout [Integer] HTTP request timeout in seconds
+      # @return [Sandbox] The created sandbox instance
+      #
+      # @example
+      #   sandbox = E2B::Sandbox.create(template: "base")
+      #   sandbox = E2B::Sandbox.create(template: "python", timeout: 600)
+      def create(template: "base", timeout: DEFAULT_TIMEOUT, metadata: nil,
+                 envs: nil, api_key: nil, domain: DEFAULT_DOMAIN,
+                 request_timeout: 120)
+        api_key = resolve_api_key(api_key)
+        http_client = build_http_client(api_key)
+
+        body = {
+          templateID: template,
+          timeout: timeout
+        }
+        body[:metadata] = metadata if metadata
+        body[:envVars] = envs if envs
+
+        response = http_client.post("/sandboxes", body: body, timeout: request_timeout)
+
+        new(
+          sandbox_data: response,
+          http_client: http_client,
+          api_key: api_key,
+          domain: domain
+        )
+      end
+
+      # Connect to an existing running sandbox
+      #
+      # @param sandbox_id [String] The sandbox ID to connect to
+      # @param timeout [Integer, nil] New timeout in seconds (extends TTL)
+      # @param api_key [String, nil] API key
+      # @param domain [String] E2B domain
+      # @return [Sandbox] The sandbox instance
+      def connect(sandbox_id, timeout: nil, api_key: nil, domain: DEFAULT_DOMAIN)
+        api_key = resolve_api_key(api_key)
+        http_client = build_http_client(api_key)
+
+        if timeout
+          response = http_client.post("/sandboxes/#{sandbox_id}/connect",
+            body: { timeout: timeout })
+        else
+          response = http_client.get("/sandboxes/#{sandbox_id}")
+        end
+
+        new(
+          sandbox_data: response,
+          http_client: http_client,
+          api_key: api_key,
+          domain: domain
+        )
+      end
+
+      # List running sandboxes
+      #
+      # @param query [Hash, nil] Filter parameters (metadata, state)
+      # @param limit [Integer] Maximum results per page
+      # @param next_token [String, nil] Pagination token
+      # @param api_key [String, nil] API key
+      # @return [Array<Hash>] List of sandbox info hashes
+      def list(query: nil, limit: 100, next_token: nil, api_key: nil)
+        api_key = resolve_api_key(api_key)
+        http_client = build_http_client(api_key)
+
+        params = { limit: limit }
+        params[:nextToken] = next_token if next_token
+        if query
+          params[:metadata] = query[:metadata].to_json if query[:metadata]
+          params[:state] = query[:state] if query[:state]
+        end
+
+        response = http_client.get("/v2/sandboxes", params: params)
+
+        sandboxes = if response.is_a?(Array)
+                      response
+                    elsif response.is_a?(Hash)
+                      response["sandboxes"] || response[:sandboxes] || []
+                    else
+                      []
+                    end
+        Array(sandboxes)
+      end
+
+      # Kill a sandbox by ID
+      #
+      # @param sandbox_id [String] Sandbox ID to kill
+      # @param api_key [String, nil] API key
+      def kill(sandbox_id, api_key: nil)
+        api_key = resolve_api_key(api_key)
+        http_client = build_http_client(api_key)
+        http_client.delete("/sandboxes/#{sandbox_id}")
+        true
+      rescue E2B::NotFoundError
+        true
+      end
+
+      private
+
+      def resolve_api_key(api_key)
+        key = api_key || E2B.configuration&.api_key || ENV["E2B_API_KEY"]
+        raise ConfigurationError, "E2B API key is required. Set E2B_API_KEY or pass api_key:" unless key && !key.empty?
+        key
+      end
+
+      def build_http_client(api_key)
+        base_url = E2B.configuration&.api_url || Configuration::DEFAULT_API_URL
+        API::HttpClient.new(base_url: base_url, api_key: api_key)
+      end
+    end
+
+    # -------------------------------------------------------------------
+    # Instance methods
+    # -------------------------------------------------------------------
+
     # Initialize a new Sandbox instance
     #
-    # @param sandbox_data [Hash] Sandbox data from API
+    # @param sandbox_data [Hash] Sandbox data from API response
     # @param http_client [API::HttpClient] HTTP client for API calls
     # @param api_key [String] API key for authentication
     # @param domain [String] E2B domain
@@ -76,52 +215,39 @@ module E2B
       initialize_services
     end
 
-    # Refresh sandbox data from the API
-    def refresh
+    # Get sandbox info from the API
+    #
+    # @return [Hash] Sandbox info
+    def get_info
       response = @http_client.get("/sandboxes/#{@sandbox_id}")
       process_sandbox_data(response)
+      response
     end
 
     # Check if the sandbox is running
     #
+    # @param request_timeout [Integer] Request timeout in seconds
     # @return [Boolean]
-    def running?
+    def running?(request_timeout: 10)
       return false if @end_at && Time.now >= @end_at
 
-      # Refresh and check
-      begin
-        refresh
-        true
-      rescue NotFoundError
-        false
-      end
+      get_info
+      true
+    rescue NotFoundError, E2BError
+      false
     end
 
     # Set the sandbox timeout
     #
-    # @param timeout_ms [Integer] Timeout in milliseconds (max 24 hours = 86_400_000)
-    #
-    # @example Extend by 1 hour
-    #   sandbox.set_timeout(3_600_000)
-    def set_timeout(timeout_ms)
-      raise ArgumentError, "Timeout must be positive" if timeout_ms <= 0
-      raise ArgumentError, "Timeout cannot exceed 24 hours" if timeout_ms > 86_400_000
+    # @param timeout [Integer] Timeout in seconds
+    def set_timeout(timeout)
+      raise ArgumentError, "Timeout must be positive" if timeout <= 0
+      raise ArgumentError, "Timeout cannot exceed 24 hours (86400s)" if timeout > 86_400
 
-      # E2B API expects timeout in seconds
-      timeout_seconds = (timeout_ms / 1000).to_i
-      @http_client.post("/sandboxes/#{@sandbox_id}/timeout", body: {
-        timeout: timeout_seconds
-      })
+      @http_client.post("/sandboxes/#{@sandbox_id}/timeout",
+        body: { timeout: timeout })
 
-      # Update local end_at
-      @end_at = Time.now + (timeout_ms / 1000.0)
-    end
-
-    # Keep the sandbox alive by extending timeout
-    #
-    # @param duration_ms [Integer] Duration to extend by (default: 1 hour)
-    def keep_alive(duration_ms: 3_600_000)
-      set_timeout(duration_ms)
+      @end_at = Time.now + timeout
     end
 
     # Kill/terminate the sandbox
@@ -136,47 +262,75 @@ module E2B
 
     # Resume a paused sandbox
     #
-    # @param timeout_ms [Integer, nil] New timeout in milliseconds
-    def resume(timeout_ms: nil)
+    # @param timeout [Integer, nil] New timeout in seconds
+    def resume(timeout: nil)
       body = {}
-      # E2B API expects timeout in seconds
-      body[:timeout] = (timeout_ms / 1000).to_i if timeout_ms
+      body[:timeout] = timeout if timeout
 
       response = @http_client.post("/sandboxes/#{@sandbox_id}/connect", body: body)
       process_sandbox_data(response) if response.is_a?(Hash)
     end
 
-    # Get the public URL for a port
+    # Create a snapshot of the sandbox
+    #
+    # @return [Hash] Snapshot info with snapshot_id
+    def create_snapshot
+      @http_client.post("/sandboxes/#{@sandbox_id}/snapshots")
+    end
+
+    # Get the host string for a port (without protocol)
     #
     # @param port [Integer] Port number
-    # @return [String] Public URL for the port
-    #
-    # @example Get URL for dev server on port 4321
-    #   url = sandbox.get_host(4321)
-    #   # => "https://4321-abc123.e2b.app"
+    # @return [String] Host string like "4321-abc123.e2b.app"
     def get_host(port)
-      # E2B URL format: https://{port}-{sandboxId}.{domain}
-      "https://#{port}-#{@sandbox_id}.#{@domain}"
+      "#{port}-#{@sandbox_id}.#{@domain}"
+    end
+
+    # Get full URL for a port
+    #
+    # @param port [Integer] Port number
+    # @return [String] Full URL like "https://4321-abc123.e2b.app"
+    def get_url(port)
+      "https://#{get_host(port)}"
     end
 
     # Get URL for downloading a file
     #
     # @param path [String] File path in the sandbox
+    # @param user [String, nil] Username context
     # @return [String] Download URL
-    def download_url(path)
+    def download_url(path, user: nil)
       encoded_path = URI.encode_www_form_component(path)
-      # E2B URL format: https://{port}-{sandboxId}.{domain}
-      "https://#{Services::BaseService::ENVD_PORT}-#{@sandbox_id}.#{@domain}/files/download?path=#{encoded_path}"
+      base = "https://#{Services::BaseService::ENVD_PORT}-#{@sandbox_id}.#{@domain}/files"
+      url = "#{base}?path=#{encoded_path}"
+      url += "&username=#{URI.encode_www_form_component(user)}" if user
+      url
     end
 
     # Get URL for uploading a file
     #
-    # @param path [String, nil] Destination path (defaults to home directory)
+    # @param path [String, nil] Destination path
+    # @param user [String, nil] Username context
     # @return [String] Upload URL
-    def upload_url(path = nil)
-      # E2B URL format: https://{port}-{sandboxId}.{domain}
-      base = "https://#{Services::BaseService::ENVD_PORT}-#{@sandbox_id}.#{@domain}/files/upload"
-      path ? "#{base}?path=#{URI.encode_www_form_component(path)}" : base
+    def upload_url(path = nil, user: nil)
+      base = "https://#{Services::BaseService::ENVD_PORT}-#{@sandbox_id}.#{@domain}/files"
+      params = []
+      params << "path=#{URI.encode_www_form_component(path)}" if path
+      params << "username=#{URI.encode_www_form_component(user)}" if user
+      params.empty? ? base : "#{base}?#{params.join("&")}"
+    end
+
+    # Get sandbox metrics (CPU, memory, disk usage)
+    #
+    # @param start_time [Time, nil] Metrics start time
+    # @param end_time [Time, nil] Metrics end time
+    # @return [Array<Hash>] Metrics data
+    def get_metrics(start_time: nil, end_time: nil)
+      params = {}
+      params[:start] = start_time.iso8601 if start_time
+      params[:end] = end_time.iso8601 if end_time
+
+      @http_client.get("/sandboxes/#{@sandbox_id}/metrics", params: params)
     end
 
     # Get sandbox logs
@@ -189,14 +343,7 @@ module E2B
       params[:start] = start_time.iso8601 if start_time
 
       response = @http_client.get("/sandboxes/#{@sandbox_id}/logs", params: params)
-      response["logs"] || response[:logs] || []
-    end
-
-    # Get sandbox metrics (CPU, memory, disk usage)
-    #
-    # @return [Hash] Metrics data
-    def metrics
-      @http_client.get("/sandboxes/#{@sandbox_id}/metrics")
+      response.is_a?(Hash) ? (response["logs"] || []) : response
     end
 
     # Time remaining until sandbox timeout
@@ -209,16 +356,13 @@ module E2B
       remaining.positive? ? remaining : 0
     end
 
-    # Alias for sandbox_id for compatibility
+    # Alias for sandbox_id
     alias id sandbox_id
 
     private
 
     def process_sandbox_data(data)
       return unless data.is_a?(Hash)
-
-      # Debug logging
-      Rails.logger.info "[E2B::Sandbox] Processing sandbox data keys: #{data.keys.inspect}" if defined?(Rails)
 
       @sandbox_id = data["sandboxID"] || data["sandbox_id"] || data[:sandboxID] || @sandbox_id
       @template_id = data["templateID"] || data["template_id"] || data[:templateID] || @template_id
@@ -228,30 +372,27 @@ module E2B
       @memory_mb = data["memoryMB"] || data["memory_mb"] || data[:memoryMB]
       @metadata = data["metadata"] || data[:metadata] || {}
 
-      # Extract envd access token for authentication
       @envd_access_token = data["envdAccessToken"] || data["envd_access_token"] || data[:envdAccessToken] || @envd_access_token
-
-      # Debug logging
-      Rails.logger.info "[E2B::Sandbox] Sandbox ID: #{@sandbox_id}, envdAccessToken present: #{@envd_access_token.present?}" if defined?(Rails)
 
       @started_at = parse_time(data["startedAt"] || data["started_at"] || data[:startedAt])
       @end_at = parse_time(data["endAt"] || data["end_at"] || data[:endAt])
     end
 
     def initialize_services
-      @commands = Services::Commands.new(
+      service_opts = {
         sandbox_id: @sandbox_id,
         sandbox_domain: @domain,
         api_key: @api_key,
         access_token: @envd_access_token
-      )
+      }
 
-      @files = Services::Filesystem.new(
-        sandbox_id: @sandbox_id,
-        sandbox_domain: @domain,
-        api_key: @api_key,
-        access_token: @envd_access_token
-      )
+      @commands = Services::Commands.new(**service_opts)
+
+      @files = Services::Filesystem.new(**service_opts)
+
+      @pty = Services::Pty.new(**service_opts)
+
+      @git = Services::Git.new(commands: @commands)
     end
 
     def parse_time(value)

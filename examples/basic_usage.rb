@@ -16,15 +16,9 @@ unless ENV["E2B_API_KEY"]
   exit 1
 end
 
-# Configure E2B
-E2B.configure do |config|
-  config.api_key = ENV["E2B_API_KEY"]
-end
-
-client = E2B::Client.new
-
+# Option 1: Use Sandbox class directly (recommended, matches official SDK)
 puts "Creating sandbox..."
-sandbox = client.create(template: "base", timeout_ms: 300_000) # 5 minutes
+sandbox = E2B::Sandbox.create(template: "base", timeout: 300)
 
 puts "Sandbox ID: #{sandbox.sandbox_id}"
 
@@ -36,27 +30,41 @@ puts "Exit code: #{result.exit_code}"
 
 # Write a file
 puts "\nWriting a file..."
-sandbox.filesystem.write("/home/user/test.txt", "Hello, World!")
+sandbox.files.write("/home/user/test.txt", "Hello, World!")
 
 # Read it back
-content = sandbox.filesystem.read("/home/user/test.txt")
+content = sandbox.files.read("/home/user/test.txt")
 puts "File content: #{content}"
 
 # List directory
 puts "\nListing /home/user:"
-files = sandbox.filesystem.list("/home/user")
-files.each do |file|
-  puts "  #{file[:type] == 'dir' ? '📁' : '📄'} #{file[:name]}"
+entries = sandbox.files.list("/home/user")
+entries.each do |entry|
+  type_icon = entry.directory? ? "D" : "F"
+  puts "  [#{type_icon}] #{entry.name} (#{entry.size} bytes)"
 end
 
-# Run a more complex command
-puts "\nInstalling Node.js package..."
-result = sandbox.commands.run("npm init -y && npm install lodash", cwd: "/home/user", timeout: 60)
-if result.exit_code == 0
-  puts "Package installed successfully"
-else
-  puts "Error: #{result.stderr}"
-end
+# Run a command with streaming output
+puts "\nRunning with streaming..."
+sandbox.commands.run("for i in 1 2 3; do echo \"Count: $i\"; sleep 0.5; done",
+  on_stdout: ->(data) { print "  > #{data}" })
+
+# Background command
+puts "\nStarting background process..."
+handle = sandbox.commands.run("sleep 5 && echo done", background: true)
+puts "Background PID: #{handle.pid}"
+handle.kill
+puts "Background process killed"
+
+# Git operations
+puts "\nInitializing git repo..."
+sandbox.git.init("/home/user/project")
+sandbox.git.configure_user("Test User", "test@example.com", path: "/home/user/project")
+
+# File info
+puts "\nFile info:"
+info = sandbox.files.get_info("/home/user/test.txt")
+puts "  Path: #{info.path}, Size: #{info.size}, Type: #{info.type}"
 
 # Clean up
 puts "\nKilling sandbox..."
