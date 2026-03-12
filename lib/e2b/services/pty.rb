@@ -84,6 +84,7 @@ module E2B
       def create(size: PtySize.new, user: nil, cwd: nil, envs: nil,
                  cmd: DEFAULT_SHELL, args: DEFAULT_SHELL_ARGS, timeout: 60)
         envs = build_pty_envs(envs)
+        headers = user_auth_headers(user)
 
         process_spec = {
           cmd: cmd,
@@ -99,34 +100,11 @@ module E2B
           }
         }
 
-        pid = nil
-
-        # Use streaming RPC to capture the StartEvent and extract the PID
-        on_event = ->(event_data) {
-          event = event_data[:event]
-          if event.is_a?(Hash) && event["event"]
-            start_event = event["event"]["Start"] || event["event"]["start"]
-            if start_event && start_event["pid"]
-              pid = start_event["pid"]
-            end
-          end
-        }
-
-        response = envd_rpc(
-          "process.Process", "Start",
+        build_live_handle(
+          rpc_method: "Start",
           body: body,
-          timeout: timeout + 30,
-          on_event: on_event
-        )
-
-        # If PID was not captured from streaming, try the accumulated result
-        pid ||= extract_pid_from_result(response)
-
-        CommandHandle.new(
-          pid: pid,
-          handle_kill: -> { kill(pid) },
-          handle_send_stdin: ->(data) { send_stdin(pid, data) },
-          result: response
+          headers: headers,
+          timeout: timeout + 30
         )
       end
 
@@ -148,17 +126,10 @@ module E2B
           process: { pid: pid }
         }
 
-        response = envd_rpc(
-          "process.Process", "Connect",
+        build_live_handle(
+          rpc_method: "Connect",
           body: body,
           timeout: timeout + 30
-        )
-
-        CommandHandle.new(
-          pid: pid,
-          handle_kill: -> { kill(pid) },
-          handle_send_stdin: ->(data) { send_stdin(pid, data) },
-          result: response
         )
       end
 
@@ -178,12 +149,12 @@ module E2B
       #
       # @example Send Ctrl+C
       #   sandbox.pty.send_stdin(pid, "\x03")
-      def send_stdin(pid, data)
+      def send_stdin(pid, data, headers: nil)
         encoded = Base64.strict_encode64(data.is_a?(String) ? data : data.to_s)
         envd_rpc("process.Process", "SendInput", body: {
           process: { pid: pid },
           input: { pty: encoded }
-        })
+        }, headers: headers)
       end
 
       # Kill a PTY process with SIGKILL.
@@ -193,11 +164,11 @@ module E2B
       #
       # @example
       #   sandbox.pty.kill(12345)
-      def kill(pid)
+      def kill(pid, headers: nil)
         envd_rpc("process.Process", "SendSignal", body: {
           process: { pid: pid },
           signal: 9 # SIGKILL
-        })
+        }, headers: headers)
         true
       rescue E2B::E2BError
         false
@@ -248,6 +219,64 @@ module E2B
 
       private
 
+      def build_live_handle(rpc_method:, body:, timeout:, headers: nil)
+        stream = LiveEventStream.new
+        start_queue = Queue.new
+        start_signal_sent = false
+        pid = nil
+
+        stream_thread = Thread.new do
+          Thread.current.report_on_exception = false if Thread.current.respond_to?(:report_on_exception=)
+
+          begin
+            envd_rpc(
+              "process.Process", rpc_method,
+              body: body,
+              timeout: timeout,
+              headers: headers,
+              on_event: lambda { |event_data|
+                stream_event = event_data[:event]
+                stream.push(stream_event) if stream_event
+
+                next if start_signal_sent
+
+                extracted_pid = extract_pid_from_event(stream_event)
+                next unless extracted_pid
+
+                pid = extracted_pid
+                start_signal_sent = true
+                start_queue << [:pid, pid]
+              }
+            )
+
+            next if start_signal_sent
+
+            start_signal_sent = true
+            start_queue << [:error, E2BError.new("Failed to start PTY: expected start event")]
+          rescue StandardError => e
+            unless start_signal_sent
+              start_signal_sent = true
+              start_queue << [:error, e]
+            end
+
+            stream.fail(e)
+          ensure
+            stream.close
+          end
+        end
+
+        start_state, start_value = start_queue.pop
+        raise start_value if start_state == :error
+
+        CommandHandle.new(
+          pid: pid,
+          handle_kill: -> { kill(pid, headers: headers) },
+          handle_send_stdin: ->(data) { send_stdin(pid, data, headers: headers) },
+          handle_disconnect: -> { disconnect_live_stream(stream_thread, stream) },
+          events_proc: ->(&events_block) { stream.each(&events_block) }
+        )
+      end
+
       # Build environment variables hash with PTY defaults.
       #
       # Ensures TERM, LANG, and LC_ALL are set to sensible defaults
@@ -268,29 +297,22 @@ module E2B
         result
       end
 
-      # Extract PID from the StartEvent in a pre-materialized RPC result.
+      # Extract PID from a live stream event payload.
       #
-      # The result hash from {EnvdHttpClient#handle_streaming_rpc} or
-      # {EnvdHttpClient#handle_rpc_response} contains an :events array.
-      # The first event with a Start sub-event carries the PID.
-      #
-      # @param response [Hash] RPC response hash with :events key
+      # @param event [Hash] Raw stream event hash
       # @return [Integer, nil] Process ID, or nil if not found
-      def extract_pid_from_result(response)
-        return nil unless response.is_a?(Hash)
+      def extract_pid_from_event(event)
+        return nil unless event.is_a?(Hash) && event["event"].is_a?(Hash)
 
-        events = response[:events] || []
-        events.each do |event_hash|
-          next unless event_hash.is_a?(Hash) && event_hash["event"]
+        start_event = event["event"]["Start"] || event["event"]["start"]
+        return nil unless start_event && start_event["pid"]
 
-          event = event_hash["event"]
-          start_event = event["Start"] || event["start"]
-          if start_event && start_event["pid"]
-            return start_event["pid"]
-          end
-        end
+        start_event["pid"].to_i
+      end
 
-        nil
+      def disconnect_live_stream(stream_thread, stream)
+        stream.close(discard_pending: true)
+        stream_thread.kill if stream_thread&.alive?
       end
     end
   end
