@@ -17,10 +17,14 @@ Aligned with the [official E2B SDKs](https://github.com/e2b-dev/E2B) (Python/JS)
 
 ## Installation
 
-Add to your Gemfile:
+```bash
+gem install e2b
+```
+
+Or add to your Gemfile:
 
 ```ruby
-gem 'e2b', git: 'https://github.com/ya-luotao/e2b-ruby.git'
+gem 'e2b'
 ```
 
 Then:
