@@ -395,6 +395,30 @@ module E2B
       self
     end
 
+    def from_aws_registry(image, access_key_id:, secret_access_key:, region:)
+      @base_image = image
+      @base_template = nil
+      @registry_config = {
+        type: "aws",
+        awsAccessKeyId: access_key_id,
+        awsSecretAccessKey: secret_access_key,
+        awsRegion: region
+      }
+      @force = true if @force_next_layer
+      self
+    end
+
+    def from_gcp_registry(image, service_account_json:)
+      @base_image = image
+      @base_template = nil
+      @registry_config = {
+        type: "gcp",
+        serviceAccountJson: read_gcp_service_account_json(service_account_json)
+      }
+      @force = true if @force_next_layer
+      self
+    end
+
     def from_template(template)
       @base_template = template
       @base_image = nil
@@ -425,14 +449,29 @@ module E2B
       self
     end
 
-    def run_cmd(cmd, user: nil)
-      Array(cmd).each do |command|
-        @instructions << {
-          type: "RUN",
-          args: [command.to_s, user || ""],
-          force: @force_next_layer
-        }
+    def copy_items(items)
+      items.each do |item|
+        copy(
+          copy_item_value(item, :src),
+          copy_item_value(item, :dest),
+          force_upload: copy_item_value(item, :forceUpload, required: false),
+          user: copy_item_value(item, :user, required: false),
+          mode: copy_item_value(item, :mode, required: false),
+          resolve_symlinks: copy_item_value(item, :resolveSymlinks, required: false)
+        )
       end
+
+      self
+    end
+
+    def run_cmd(cmd, user: nil)
+      commands = Array(cmd).map(&:to_s)
+
+      @instructions << {
+        type: "RUN",
+        args: [commands.join(" && "), user || ""],
+        force: @force_next_layer
+      }
 
       self
     end
@@ -467,6 +506,37 @@ module E2B
         force: @force_next_layer
       }
       self
+    end
+
+    def remove(path, force: false, recursive: false, user: nil)
+      args = ["rm"]
+      args << "-r" if recursive
+      args << "-f" if force
+      args.concat(Array(path).map(&:to_s))
+      run_cmd(args.join(" "), user: user)
+    end
+
+    def rename(src, dest, force: false, user: nil)
+      args = ["mv"]
+      args << "-f" if force
+      args << src.to_s
+      args << dest.to_s
+      run_cmd(args.join(" "), user: user)
+    end
+
+    def make_dir(path, mode: nil, user: nil)
+      args = ["mkdir", "-p"]
+      args << "-m #{format('%04o', mode)}" if mode
+      args.concat(Array(path).map(&:to_s))
+      run_cmd(args.join(" "), user: user)
+    end
+
+    def make_symlink(src, dest, user: nil, force: false)
+      args = ["ln", "-s"]
+      args << "-f" if force
+      args << src.to_s
+      args << dest.to_s
+      run_cmd(args.join(" "), user: user)
     end
 
     def skip_cache
@@ -673,6 +743,20 @@ module E2B
       File.readlines(dockerignore_path, chomp: true)
         .map(&:strip)
         .reject { |line| line.empty? || line.start_with?("#") }
+    end
+
+    def read_gcp_service_account_json(path_or_content)
+      return JSON.generate(path_or_content) unless path_or_content.is_a?(String)
+
+      File.read(File.join(@file_context_path, path_or_content))
+    end
+
+    def copy_item_value(item, key, required: true)
+      value = item[key]
+      value = item[key.to_s] if value.nil?
+      return value unless value.nil? && required
+
+      raise KeyError, "Missing copy_items value for #{key}"
     end
   end
 end

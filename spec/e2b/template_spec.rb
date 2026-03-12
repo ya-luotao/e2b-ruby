@@ -265,6 +265,16 @@ RSpec.describe E2B::Template do
       )
     end
 
+    it "joins array commands into a single RUN step" do
+      template = described_class.new
+        .from_base_image
+        .run_cmd(["apt-get update", "apt-get install -y git"], user: "root")
+
+      expect(template.to_h[:steps]).to eq([
+        { type: "RUN", args: ["apt-get update && apt-get install -y git", "root"], force: false }
+      ])
+    end
+
     it "computes file hashes for copy steps" do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
@@ -292,6 +302,61 @@ RSpec.describe E2B::Template do
       expect {
         template.to_dockerfile
       }.to raise_error(E2B::TemplateError, /Cannot convert template built from another template to Dockerfile/)
+    end
+
+    it "serializes copy_items and filesystem mutation helpers" do
+      template = described_class.new
+        .from_base_image
+        .copy_items([
+          { src: "app.rb", dest: "/app/" },
+          { "src" => "config.yml", "dest" => "/etc/app/", "mode" => 0o644, "user" => "root" }
+        ])
+        .remove(["/tmp/cache", "/tmp/build"], recursive: true, force: true, user: "root")
+        .rename("/etc/app/config.yml", "/etc/app/settings.yml", force: true)
+        .make_dir(["/app/logs", "/app/tmp"], mode: 0o755)
+        .make_symlink("/usr/bin/python3", "/usr/bin/python", force: true, user: "root")
+
+      expect(template.to_h[:steps]).to eq([
+        { type: "COPY", args: ["app.rb", "/app/", "", ""], force: false },
+        { type: "COPY", args: ["config.yml", "/etc/app/", "root", "0644"], force: false },
+        { type: "RUN", args: ["rm -r -f /tmp/cache /tmp/build", "root"], force: false },
+        { type: "RUN", args: ["mv -f /etc/app/config.yml /etc/app/settings.yml", ""], force: false },
+        { type: "RUN", args: ["mkdir -p -m 0755 /app/logs /app/tmp", ""], force: false },
+        { type: "RUN", args: ["ln -s -f /usr/bin/python3 /usr/bin/python", "root"], force: false }
+      ])
+    end
+
+    it "serializes AWS and GCP registry sources" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "gcp.json"), "{\"client_email\":\"svc@example.test\"}")
+
+        aws_template = described_class.new
+          .from_aws_registry(
+            "123456789.dkr.ecr.us-west-2.amazonaws.com/app:latest",
+            access_key_id: "AKIA123",
+            secret_access_key: "secret",
+            region: "us-west-2"
+          )
+        gcp_template = described_class.new(file_context_path: dir)
+          .from_gcp_registry("gcr.io/project/app:latest", service_account_json: "gcp.json")
+
+        expect(aws_template.to_h).to include(
+          fromImage: "123456789.dkr.ecr.us-west-2.amazonaws.com/app:latest",
+          fromImageRegistry: {
+            type: "aws",
+            awsAccessKeyId: "AKIA123",
+            awsSecretAccessKey: "secret",
+            awsRegion: "us-west-2"
+          }
+        )
+        expect(gcp_template.to_h).to include(
+          fromImage: "gcr.io/project/app:latest",
+          fromImageRegistry: {
+            type: "gcp",
+            serviceAccountJson: "{\"client_email\":\"svc@example.test\"}"
+          }
+        )
+      end
     end
   end
 
