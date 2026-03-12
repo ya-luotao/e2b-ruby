@@ -7,6 +7,7 @@
 require_relative "e2b/version"
 require_relative "e2b/errors"
 require_relative "e2b/configuration"
+require_relative "e2b/ready_cmd"
 
 # API layer
 require_relative "e2b/api/http_client"

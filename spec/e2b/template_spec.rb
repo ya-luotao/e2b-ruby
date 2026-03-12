@@ -214,6 +214,21 @@ RSpec.describe E2B::Template do
     end
   end
 
+  describe "ready command helpers" do
+    it "builds helper commands and accepts ReadyCmd values in template start commands" do
+      template = described_class.new
+        .from_base_image
+        .set_start_cmd("bundle exec ruby app.rb", E2B.wait_for_file("/tmp/ready"))
+
+      expect(E2B.wait_for_port(8080).get_cmd).to eq("ss -tuln | grep :8080")
+      expect(E2B.wait_for_url("http://localhost:3000/health", 204).get_cmd)
+        .to eq('curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health | grep -q "204"')
+      expect(E2B.wait_for_process("nginx").get_cmd).to eq("pgrep nginx > /dev/null")
+      expect(E2B.wait_for_timeout(5000).get_cmd).to eq("sleep 5")
+      expect(template.to_h[:readyCmd]).to eq("[ -f /tmp/ready ]")
+    end
+  end
+
   describe "builder serialization" do
     it "serializes image-based templates to hashes and Dockerfiles" do
       template = described_class.new
@@ -417,7 +432,7 @@ RSpec.describe E2B::Template do
       )
       expect(devcontainer_template.to_h).to include(
         fromTemplate: "devcontainer",
-        readyCmd: "test -f /devcontainer.up",
+        readyCmd: "[ -f /devcontainer.up ]",
         startCmd: "sudo devcontainer up --workspace-folder /workspace/project && sudo /prepare-exec.sh /workspace/project | sudo tee /devcontainer.sh > /dev/null && sudo chmod +x /devcontainer.sh && sudo touch /devcontainer.up"
       )
       expect(devcontainer_template.to_h[:steps]).to eq([

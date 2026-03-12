@@ -575,7 +575,7 @@ module E2B
       ensure_devcontainer_template!
       set_start_cmd(
         "sudo devcontainer up --workspace-folder #{devcontainer_directory} && sudo /prepare-exec.sh #{devcontainer_directory} | sudo tee /devcontainer.sh > /dev/null && sudo chmod +x /devcontainer.sh && sudo touch /devcontainer.up",
-        "test -f /devcontainer.up"
+        E2B.wait_for_file("/devcontainer.up")
       )
     end
 
@@ -619,12 +619,12 @@ module E2B
 
     def set_start_cmd(start_cmd, ready_cmd = nil)
       @start_cmd = start_cmd.to_s
-      @ready_cmd = ready_cmd.to_s unless ready_cmd.nil?
+      @ready_cmd = normalize_ready_cmd(ready_cmd) unless ready_cmd.nil?
       self
     end
 
     def set_ready_cmd(ready_cmd)
-      @ready_cmd = ready_cmd.to_s
+      @ready_cmd = normalize_ready_cmd(ready_cmd)
       self
     end
 
@@ -822,6 +822,12 @@ module E2B
       return JSON.generate(path_or_content) unless path_or_content.is_a?(String)
 
       File.read(File.join(@file_context_path, path_or_content))
+    end
+
+    def normalize_ready_cmd(ready_cmd)
+      return ready_cmd.get_cmd if ready_cmd.respond_to?(:get_cmd)
+
+      ready_cmd.to_s
     end
 
     def copy_item_value(item, key, required: true)
