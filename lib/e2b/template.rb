@@ -120,6 +120,8 @@ module E2B
 
       def build(template, name: nil, alias_name: nil, tags: nil, cpu_count: 2, memory_mb: 1024, skip_cache: false,
                 on_build_logs: nil, api_key: nil, access_token: nil, domain: nil)
+        on_build_logs&.call(Models::TemplateLogEntryStart.new(timestamp: Time.now, message: "Build started"))
+
         build_info = build_in_background(
           template,
           name: name,
@@ -145,6 +147,8 @@ module E2B
         )
 
         build_info
+      ensure
+        on_build_logs&.call(Models::TemplateLogEntryEnd.new(timestamp: Time.now, message: "Build finished"))
       end
 
       def build_in_background(template, name: nil, alias_name: nil, tags: nil, cpu_count: 2, memory_mb: 1024,
@@ -415,6 +419,14 @@ module E2B
         type: "gcp",
         serviceAccountJson: read_gcp_service_account_json(service_account_json)
       }
+      @force = true if @force_next_layer
+      self
+    end
+
+    def from_dockerfile(dockerfile_content_or_path)
+      @base_template = nil
+      @registry_config = nil
+      @base_image = E2B::DockerfileParser.parse(dockerfile_content_or_path, self)
       @force = true if @force_next_layer
       self
     end

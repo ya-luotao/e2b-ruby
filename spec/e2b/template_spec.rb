@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "stringio"
 require "tmpdir"
 
 RSpec.describe E2B::Template do
@@ -226,6 +227,33 @@ RSpec.describe E2B::Template do
       expect(E2B.wait_for_process("nginx").get_cmd).to eq("pgrep nginx > /dev/null")
       expect(E2B.wait_for_timeout(5000).get_cmd).to eq("sleep 5")
       expect(template.to_h[:readyCmd]).to eq("[ -f /tmp/ready ]")
+    end
+  end
+
+  describe "build logger helpers" do
+    it "strips ansi sequences from template log entries" do
+      entry = E2B::Models::TemplateLogEntry.new(
+        timestamp: Time.parse("2026-03-13T09:00:00Z"),
+        level: "info",
+        message: "\e[31mHello\e[0m"
+      )
+
+      expect(entry.message).to eq("Hello")
+      expect(entry.to_s).to include("[info] Hello")
+    end
+
+    it "creates a default build logger that filters low-severity entries" do
+      output = StringIO.new
+      logger = E2B.default_build_logger(min_level: "warn", io: output)
+
+      logger.call(E2B::Models::TemplateLogEntryStart.new(timestamp: Time.now, message: "Build started"))
+      logger.call(E2B::Models::TemplateLogEntry.new(timestamp: Time.parse("2026-03-13T09:00:00Z"), level: "info", message: "Skip"))
+      logger.call(E2B::Models::TemplateLogEntry.new(timestamp: Time.parse("2026-03-13T09:00:01Z"), level: "warn", message: "Warn"))
+      logger.call(E2B::Models::TemplateLogEntryEnd.new(timestamp: Time.now, message: "Build finished"))
+
+      expect(output.string).to include("WARN")
+      expect(output.string).to include("Warn")
+      expect(output.string).not_to include("Skip")
     end
   end
 
@@ -504,6 +532,76 @@ RSpec.describe E2B::Template do
         )
       end
     end
+
+    it "parses Dockerfile content into builder instructions" do
+      dockerfile = <<~DOCKERFILE
+        FROM python:3.12
+        ARG APP_ENV
+        ENV PORT=3000 APP_ENV=production
+        COPY --chown=root:root app.py /app/app.py
+        RUN pip install -r requirements.txt \\
+          && python -m compileall /app
+        CMD ["python", "/app/app.py"]
+      DOCKERFILE
+
+      template = described_class.new.from_dockerfile(dockerfile)
+
+      expect(template.to_h).to eq(
+        fromImage: "python:3.12",
+        startCmd: "python /app/app.py",
+        readyCmd: "sleep 20",
+        force: false,
+        steps: [
+          { type: "USER", args: ["root"], force: false },
+          { type: "WORKDIR", args: ["/"], force: false },
+          { type: "ENV", args: ["APP_ENV", ""], force: false },
+          { type: "ENV", args: ["PORT", "3000", "APP_ENV", "production"], force: false },
+          { type: "COPY", args: ["app.py", "/app/app.py", "root:root", ""], force: false },
+          { type: "RUN", args: ["pip install -r requirements.txt && python -m compileall /app", ""], force: false },
+          { type: "USER", args: ["user"], force: false },
+          { type: "WORKDIR", args: ["/home/user"], force: false }
+        ]
+      )
+    end
+
+    it "parses Dockerfile files from disk and preserves explicit user/workdir instructions" do
+      Dir.mktmpdir do |dir|
+        dockerfile_path = File.join(dir, "Dockerfile")
+        File.write(dockerfile_path, <<~DOCKERFILE)
+          FROM ruby:3.3
+          WORKDIR /app
+          USER app
+          ENTRYPOINT bundle exec ruby server.rb
+        DOCKERFILE
+
+        template = described_class.new.from_dockerfile(dockerfile_path)
+
+        expect(template.to_h).to eq(
+          fromImage: "ruby:3.3",
+          startCmd: "bundle exec ruby server.rb",
+          readyCmd: "sleep 20",
+          force: false,
+          steps: [
+            { type: "USER", args: ["root"], force: false },
+            { type: "WORKDIR", args: ["/"], force: false },
+            { type: "WORKDIR", args: ["/app"], force: false },
+            { type: "USER", args: ["app"], force: false }
+          ]
+        )
+      end
+    end
+
+    it "rejects multi-stage Dockerfiles" do
+      dockerfile = <<~DOCKERFILE
+        FROM node:20 AS builder
+        RUN npm install
+        FROM nginx:stable
+      DOCKERFILE
+
+      expect {
+        described_class.new.from_dockerfile(dockerfile)
+      }.to raise_error(E2B::TemplateError, /Multi-stage Dockerfiles are not supported/)
+    end
   end
 
   describe ".build" do
@@ -534,7 +632,9 @@ RSpec.describe E2B::Template do
         access_token: nil,
         domain: nil
       )
+      expect(logs.first).to eq("Build started")
       expect(logs).to include("Waiting for logs...")
+      expect(logs.last).to eq("Build finished")
     end
   end
 end

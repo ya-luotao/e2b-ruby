@@ -18,7 +18,11 @@ module E2B
       def initialize(timestamp:, level:, message:)
         @timestamp = timestamp
         @level = level
-        @message = message
+        @message = self.class.strip_ansi_escape_codes(message.to_s)
+      end
+
+      def to_s
+        "[#{@timestamp&.iso8601}] [#{@level}] #{@message}"
       end
 
       def self.parse_time(value)
@@ -28,6 +32,22 @@ module E2B
         Time.parse(value)
       rescue ArgumentError
         nil
+      end
+
+      def self.strip_ansi_escape_codes(message)
+        message.gsub(/\e\[[0-9;?]*[ -\/]*[@-~]/, "")
+      end
+    end
+
+    class TemplateLogEntryStart < TemplateLogEntry
+      def initialize(timestamp:, message:)
+        super(timestamp: timestamp, level: "debug", message: message)
+      end
+    end
+
+    class TemplateLogEntryEnd < TemplateLogEntry
+      def initialize(timestamp:, message:)
+        super(timestamp: timestamp, level: "debug", message: message)
       end
     end
   end

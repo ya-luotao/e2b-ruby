@@ -8,6 +8,8 @@ require_relative "e2b/version"
 require_relative "e2b/errors"
 require_relative "e2b/configuration"
 require_relative "e2b/ready_cmd"
+require_relative "e2b/dockerfile_parser"
+require_relative "e2b/template_logger"
 
 # API layer
 require_relative "e2b/api/http_client"
