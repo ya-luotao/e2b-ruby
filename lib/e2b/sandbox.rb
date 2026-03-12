@@ -91,11 +91,11 @@ module E2B
       #   sandbox = E2B::Sandbox.create(template: "base")
       #   sandbox = E2B::Sandbox.create(template: "python", timeout: 600)
       def create(template: "base", timeout: DEFAULT_TIMEOUT, metadata: nil,
-                 envs: nil, api_key: nil, domain: nil,
+                 envs: nil, api_key: nil, access_token: nil, domain: nil,
                  request_timeout: 120)
-        api_key = resolve_api_key(api_key)
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
         domain = resolve_domain(domain)
-        http_client = build_http_client(api_key, domain: domain)
+        http_client = build_http_client(**credentials, domain: domain)
 
         body = {
           templateID: template,
@@ -109,7 +109,7 @@ module E2B
         new(
           sandbox_data: response,
           http_client: http_client,
-          api_key: api_key,
+          api_key: credentials[:api_key],
           domain: domain
         )
       end
@@ -121,22 +121,18 @@ module E2B
       # @param api_key [String, nil] API key
       # @param domain [String] E2B domain
       # @return [Sandbox] The sandbox instance
-      def connect(sandbox_id, timeout: nil, api_key: nil, domain: nil)
-        api_key = resolve_api_key(api_key)
+      def connect(sandbox_id, timeout: DEFAULT_TIMEOUT, api_key: nil, access_token: nil, domain: nil)
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
         domain = resolve_domain(domain)
-        http_client = build_http_client(api_key, domain: domain)
+        http_client = build_http_client(**credentials, domain: domain)
 
-        if timeout
-          response = http_client.post("/sandboxes/#{sandbox_id}/connect",
-            body: { timeout: timeout })
-        else
-          response = http_client.get("/sandboxes/#{sandbox_id}")
-        end
+        response = http_client.post("/sandboxes/#{sandbox_id}/connect",
+          body: { timeout: timeout || DEFAULT_TIMEOUT })
 
         new(
           sandbox_data: response,
           http_client: http_client,
-          api_key: api_key,
+          api_key: credentials[:api_key],
           domain: domain
         )
       end
@@ -148,9 +144,9 @@ module E2B
       # @param next_token [String, nil] Pagination token
       # @param api_key [String, nil] API key
       # @return [Array<Hash>] List of sandbox info hashes
-      def list(query: nil, limit: 100, next_token: nil, api_key: nil)
-        api_key = resolve_api_key(api_key)
-        http_client = build_http_client(api_key)
+      def list(query: nil, limit: 100, next_token: nil, api_key: nil, access_token: nil, domain: nil)
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
+        http_client = build_http_client(**credentials, domain: resolve_domain(domain))
 
         params = { limit: limit }
         params[:nextToken] = next_token if next_token
@@ -175,9 +171,9 @@ module E2B
       #
       # @param sandbox_id [String] Sandbox ID to kill
       # @param api_key [String, nil] API key
-      def kill(sandbox_id, api_key: nil)
-        api_key = resolve_api_key(api_key)
-        http_client = build_http_client(api_key)
+      def kill(sandbox_id, api_key: nil, access_token: nil, domain: nil)
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
+        http_client = build_http_client(**credentials, domain: resolve_domain(domain))
         http_client.delete("/sandboxes/#{sandbox_id}")
         true
       rescue E2B::NotFoundError
@@ -186,19 +182,31 @@ module E2B
 
       private
 
-      def resolve_api_key(api_key)
-        key = api_key || E2B.configuration&.api_key || ENV["E2B_API_KEY"]
-        raise ConfigurationError, "E2B API key is required. Set E2B_API_KEY or pass api_key:" unless key && !key.empty?
-        key
+      def resolve_credentials(api_key:, access_token:)
+        resolved_api_key = api_key || E2B.configuration&.api_key || ENV["E2B_API_KEY"]
+        resolved_access_token = access_token || E2B.configuration&.access_token || ENV["E2B_ACCESS_TOKEN"]
+
+        unless (resolved_api_key && !resolved_api_key.empty?) || (resolved_access_token && !resolved_access_token.empty?)
+          raise ConfigurationError,
+            "E2B credentials are required. Set E2B_API_KEY or E2B_ACCESS_TOKEN, or pass api_key:/access_token:."
+        end
+
+        { api_key: resolved_api_key, access_token: resolved_access_token }
       end
 
       def resolve_domain(domain)
-        domain || E2B.configuration&.domain || ENV["E2B_DOMAIN"] || DEFAULT_DOMAIN
+        domain || E2B.configuration&.domain || ENV["E2B_DOMAIN"] || Configuration::DEFAULT_DOMAIN
       end
 
-      def build_http_client(api_key, domain: nil)
-        base_url = E2B.configuration&.api_url || ENV["E2B_API_URL"] || "https://api.#{domain || DEFAULT_DOMAIN}"
-        API::HttpClient.new(base_url: base_url, api_key: api_key)
+      def build_http_client(api_key:, access_token:, domain:)
+        config = E2B.configuration
+        base_url = config&.api_url || ENV["E2B_API_URL"] || Configuration.default_api_url(domain)
+        API::HttpClient.new(
+          base_url: base_url,
+          api_key: api_key,
+          access_token: access_token,
+          logger: config&.logger
+        )
       end
     end
 
@@ -377,6 +385,7 @@ module E2B
       @cpu_count = data["cpuCount"] || data["cpu_count"] || data[:cpuCount]
       @memory_mb = data["memoryMB"] || data["memory_mb"] || data[:memoryMB]
       @metadata = data["metadata"] || data[:metadata] || {}
+      @domain = data["domain"] || data[:domain] || @domain
 
       @envd_access_token = data["envdAccessToken"] || data["envd_access_token"] || data[:envdAccessToken] || @envd_access_token
 

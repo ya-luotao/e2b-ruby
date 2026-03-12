@@ -5,12 +5,24 @@ require "spec_helper"
 RSpec.describe E2B::Sandbox do
   let(:http_client) { instance_double(E2B::API::HttpClient) }
 
-  describe ".create" do
-    before do
-      allow(E2B::API::HttpClient).to receive(:new).and_return(http_client)
+  before do
+    allow(ENV).to receive(:[]).and_call_original
+    %w[E2B_API_KEY E2B_ACCESS_TOKEN E2B_API_URL E2B_DOMAIN E2B_DEBUG].each do |name|
+      allow(ENV).to receive(:[]).with(name).and_return(nil)
     end
+  end
 
+  describe ".create" do
     it "posts the create payload and returns a hydrated sandbox" do
+      expect(E2B::API::HttpClient).to receive(:new)
+        .with(
+          base_url: "https://api.custom.e2b.test",
+          api_key: "api-key",
+          access_token: nil,
+          logger: nil
+        )
+        .and_return(http_client)
+
       allow(http_client).to receive(:post)
         .with(
           "/sandboxes",
@@ -28,7 +40,8 @@ RSpec.describe E2B::Sandbox do
             "templateID" => "base",
             "alias" => "runner",
             "metadata" => { "env" => "test" },
-            "envdAccessToken" => "envd-token"
+            "envdAccessToken" => "envd-token",
+            "domain" => "remote.e2b.test"
           }
         )
 
@@ -44,7 +57,24 @@ RSpec.describe E2B::Sandbox do
       expect(sandbox.sandbox_id).to eq("sbx_123")
       expect(sandbox.alias_name).to eq("runner")
       expect(sandbox.metadata).to eq({ "env" => "test" })
-      expect(sandbox.get_url(3000)).to eq("https://3000-sbx_123.custom.e2b.test")
+      expect(sandbox.get_url(3000)).to eq("https://3000-sbx_123.remote.e2b.test")
+    end
+
+    it "accepts access-token authentication without an API key" do
+      expect(E2B::API::HttpClient).to receive(:new)
+        .with(
+          base_url: "https://api.e2b.app",
+          api_key: nil,
+          access_token: "access-token",
+          logger: nil
+        )
+        .and_return(http_client)
+
+      allow(http_client).to receive(:post).and_return({ "sandboxID" => "sbx_123" })
+
+      sandbox = described_class.create(access_token: "access-token")
+
+      expect(sandbox.sandbox_id).to eq("sbx_123")
     end
   end
 
@@ -53,8 +83,10 @@ RSpec.describe E2B::Sandbox do
       allow(E2B::API::HttpClient).to receive(:new).and_return(http_client)
     end
 
-    it "uses GET when no timeout is provided" do
-      allow(http_client).to receive(:get).with("/sandboxes/sbx_123").and_return({ "sandboxID" => "sbx_123" })
+    it "uses the connect endpoint even when no timeout is provided" do
+      allow(http_client).to receive(:post)
+        .with("/sandboxes/sbx_123/connect", body: { timeout: 300 })
+        .and_return({ "sandboxID" => "sbx_123" })
 
       sandbox = described_class.connect("sbx_123", api_key: "api-key")
 
@@ -64,11 +96,16 @@ RSpec.describe E2B::Sandbox do
     it "uses the connect endpoint when a timeout is provided" do
       allow(http_client).to receive(:post)
         .with("/sandboxes/sbx_123/connect", body: { timeout: 30 })
-        .and_return({ "sandboxID" => "sbx_123", "endAt" => "2026-03-12T01:00:00Z" })
+        .and_return({
+          "sandboxID" => "sbx_123",
+          "endAt" => "2026-03-12T01:00:00Z",
+          "domain" => "resume.e2b.test"
+        })
 
       sandbox = described_class.connect("sbx_123", timeout: 30, api_key: "api-key")
 
       expect(sandbox.end_at).to eq(Time.parse("2026-03-12T01:00:00Z"))
+      expect(sandbox.get_url(8080)).to eq("https://8080-sbx_123.resume.e2b.test")
     end
   end
 

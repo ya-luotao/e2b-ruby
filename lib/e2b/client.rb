@@ -30,10 +30,11 @@ module E2B
       @http_client = API::HttpClient.new(
         base_url: @config.api_url,
         api_key: @config.api_key,
+        access_token: @config.access_token,
         logger: @config.logger
       )
 
-      @domain = Sandbox::DEFAULT_DOMAIN
+      @domain = @config.domain
     end
 
     # Create a new sandbox
@@ -77,12 +78,9 @@ module E2B
     # @param timeout [Integer, nil] Timeout in seconds
     # @return [Sandbox]
     def connect(sandbox_id, timeout: nil)
-      if timeout
-        response = @http_client.post("/sandboxes/#{sandbox_id}/connect",
-          body: { timeout: timeout })
-      else
-        response = @http_client.get("/sandboxes/#{sandbox_id}")
-      end
+      timeout_seconds = timeout || ((@config.sandbox_timeout_ms || (Sandbox::DEFAULT_TIMEOUT * 1000)) / 1000).to_i
+      response = @http_client.post("/sandboxes/#{sandbox_id}/connect",
+        body: { timeout: timeout_seconds })
 
       Sandbox.new(
         sandbox_data: response,

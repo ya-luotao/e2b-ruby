@@ -19,11 +19,13 @@ module E2B
       # Initialize a new HTTP client
       #
       # @param base_url [String] Base URL for API requests
-      # @param api_key [String] API key for authentication
+      # @param api_key [String, nil] API key for authentication
+      # @param access_token [String, nil] Access token for bearer authentication
       # @param logger [Logger, nil] Optional logger
-      def initialize(base_url:, api_key:, logger: nil)
+      def initialize(base_url:, api_key: nil, access_token: nil, logger: nil)
         @base_url = base_url.end_with?("/") ? base_url : "#{base_url}/"
         @api_key = api_key
+        @access_token = access_token
         @logger = logger
         @connection = build_connection
       end
@@ -100,7 +102,8 @@ module E2B
           conn.response :json, content_type: /\bjson$/
           conn.adapter Faraday.default_adapter
 
-          conn.headers["X-API-Key"] = @api_key
+          conn.headers["X-API-Key"] = @api_key if @api_key && !@api_key.empty?
+          conn.headers["Authorization"] = "Bearer #{@access_token}" if @access_token && !@access_token.empty?
           conn.headers["Content-Type"] = "application/json"
           conn.headers["Accept"] = "application/json"
           conn.headers["User-Agent"] = "e2b-ruby-sdk/#{E2B::VERSION}"

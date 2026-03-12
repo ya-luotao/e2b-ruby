@@ -3,9 +3,11 @@
 require "spec_helper"
 
 RSpec.describe E2B::API::HttpClient do
-  subject(:client) { described_class.new(base_url: base_url, api_key: "test-key") }
+  subject(:client) { described_class.new(base_url: base_url, api_key: api_key, access_token: access_token) }
 
   let(:base_url) { "https://api.example.test" }
+  let(:api_key) { "test-key" }
+  let(:access_token) { nil }
 
   describe "#get" do
     it "parses JSON string responses when the content type is JSON" do
@@ -28,6 +30,21 @@ RSpec.describe E2B::API::HttpClient do
         )
 
       expect(client.get("/health")).to eq({ "ok" => true })
+    end
+
+    it "sends bearer authorization when initialized with an access token" do
+      stub_request(:get, "#{base_url}/sandboxes")
+        .with(headers: { "Authorization" => "Bearer access-token" })
+        .to_return(
+          status: 200,
+          body: '{"sandboxID":"sbx_123"}',
+          headers: { "Content-Type" => "application/json" }
+        )
+
+      described_class.new(base_url: base_url, access_token: "access-token").get("/sandboxes")
+
+      expect(a_request(:get, "#{base_url}/sandboxes")
+        .with(headers: { "Authorization" => "Bearer access-token" })).to have_been_made
     end
   end
 

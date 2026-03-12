@@ -16,11 +16,11 @@ module E2B
   #     config.request_timeout = 120
   #   end
   class Configuration
-    # Default API base URL
-    DEFAULT_API_URL = "https://api.e2b.app"
-
     # Default domain
     DEFAULT_DOMAIN = "e2b.app"
+
+    # Default API base URL
+    DEFAULT_API_URL = "https://api.#{DEFAULT_DOMAIN}"
 
     # Default request timeout in seconds
     DEFAULT_REQUEST_TIMEOUT = 60
@@ -32,7 +32,7 @@ module E2B
     DEFAULT_TIMEOUT_MS = 300_000
 
     # Default sandbox timeout in milliseconds (backward compat)
-    DEFAULT_SANDBOX_TIMEOUT_MS = 3_600_000
+    DEFAULT_SANDBOX_TIMEOUT_MS = 300_000
 
     # Maximum sandbox timeout (24 hours for Pro)
     MAX_SANDBOX_TIMEOUT_MS = 86_400_000
@@ -90,11 +90,11 @@ module E2B
       @api_key = api_key || ENV["E2B_API_KEY"]
       @access_token = access_token || ENV["E2B_ACCESS_TOKEN"]
       @domain = domain || ENV["E2B_DOMAIN"] || DEFAULT_DOMAIN
-      @api_url = api_url || ENV["E2B_API_URL"] || "https://api.#{@domain}"
+      @debug = debug || ENV["E2B_DEBUG"]&.downcase == "true"
+      @api_url = api_url || ENV["E2B_API_URL"] || self.class.default_api_url(@domain, debug: @debug)
       @request_timeout = request_timeout
       @timeout_ms = timeout_ms
       @sandbox_timeout_ms = sandbox_timeout_ms
-      @debug = debug || ENV["E2B_DEBUG"]&.downcase == "true"
       @default_template = nil
       @logger = nil
     end
@@ -114,6 +114,12 @@ module E2B
     # @return [Boolean]
     def valid?
       (!@api_key.nil? && !@api_key.empty?) || (!@access_token.nil? && !@access_token.empty?)
+    end
+
+    def self.default_api_url(domain, debug: false)
+      return "http://localhost:3000" if debug
+
+      "https://api.#{domain}"
     end
   end
 end

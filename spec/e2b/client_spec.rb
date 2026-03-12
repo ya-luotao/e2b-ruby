@@ -6,6 +6,10 @@ RSpec.describe E2B::Client do
   let(:http_client) { instance_double(E2B::API::HttpClient) }
 
   before do
+    allow(ENV).to receive(:[]).and_call_original
+    %w[E2B_API_KEY E2B_ACCESS_TOKEN E2B_API_URL E2B_DOMAIN E2B_DEBUG].each do |name|
+      allow(ENV).to receive(:[]).with(name).and_return(nil)
+    end
     allow(E2B::API::HttpClient).to receive(:new).and_return(http_client)
   end
 
@@ -54,11 +58,33 @@ RSpec.describe E2B::Client do
 
       expect(sandbox.sandbox_id).to eq("sbx_123")
     end
+
+    it "supports access-token authentication and preserves the configured domain" do
+      expect(E2B::API::HttpClient).to receive(:new)
+        .with(
+          base_url: "https://api.team.e2b.test",
+          api_key: nil,
+          access_token: "access-token",
+          logger: nil
+        )
+        .and_return(http_client)
+
+      allow(http_client).to receive(:post)
+        .with("/sandboxes", body: { templateID: "base", timeout: 300 }, timeout: 120)
+        .and_return({ "sandboxID" => "sbx_123" })
+
+      client = described_class.new(access_token: "access-token", domain: "team.e2b.test")
+      sandbox = client.create
+
+      expect(sandbox.get_url(3000)).to eq("https://3000-sbx_123.team.e2b.test")
+    end
   end
 
   describe "#connect" do
-    it "uses GET when no timeout override is provided" do
-      allow(http_client).to receive(:get).with("/sandboxes/sbx_123").and_return({ "sandboxID" => "sbx_123" })
+    it "uses the connect endpoint when no timeout override is provided" do
+      allow(http_client).to receive(:post)
+        .with("/sandboxes/sbx_123/connect", body: { timeout: 300 })
+        .and_return({ "sandboxID" => "sbx_123" })
 
       client = described_class.new(api_key: "api-key")
       sandbox = client.connect("sbx_123")
