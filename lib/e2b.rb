@@ -58,6 +58,8 @@ require_relative "e2b/client"
 #
 # @see https://e2b.dev/docs E2B Documentation
 module E2B
+  ALL_TRAFFIC = "0.0.0.0/0"
+
   class << self
     # @return [Configuration, nil] Global configuration
     attr_accessor :configuration

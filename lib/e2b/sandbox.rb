@@ -58,8 +58,17 @@ module E2B
     # @return [Hash] Metadata
     attr_reader :metadata
 
+    # @return [String, nil] Current sandbox state
+    attr_reader :state
+
+    # @return [String, nil] Envd version reported by the control plane
+    attr_reader :envd_version
+
     # @return [String, nil] Access token for envd authentication
     attr_reader :envd_access_token
+
+    # @return [String, nil] Access token required for proxied public traffic
+    attr_reader :traffic_access_token
 
     # @return [Services::Commands] Command execution service
     attr_reader :commands
@@ -93,18 +102,29 @@ module E2B
       #   sandbox = E2B::Sandbox.create(template: "base")
       #   sandbox = E2B::Sandbox.create(template: "python", timeout: 600)
       def create(template: "base", timeout: DEFAULT_TIMEOUT, metadata: nil,
-                 envs: nil, api_key: nil, access_token: nil, domain: nil,
+                 envs: nil, secure: true, allow_internet_access: true,
+                 network: nil, lifecycle: nil, auto_pause: nil,
+                 api_key: nil, access_token: nil, domain: nil,
                  request_timeout: 120)
         credentials = resolve_credentials(api_key: api_key, access_token: access_token)
         domain = resolve_domain(domain)
         http_client = build_http_client(**credentials, domain: domain)
+        template ||= E2B.configuration&.default_template || "base"
+        lifecycle = normalized_lifecycle(lifecycle: lifecycle, auto_pause: auto_pause)
 
         body = {
           templateID: template,
-          timeout: timeout
+          timeout: timeout,
+          secure: secure,
+          allow_internet_access: allow_internet_access,
+          autoPause: lifecycle[:on_timeout] == "pause"
         }
         body[:metadata] = metadata if metadata
         body[:envVars] = envs if envs
+        body[:network] = network if network
+        if body[:autoPause]
+          body[:autoResume] = { enabled: lifecycle[:auto_resume] }
+        end
 
         response = http_client.post("/sandboxes", body: body, timeout: request_timeout)
 
@@ -184,6 +204,29 @@ module E2B
 
       private
 
+      def normalized_lifecycle(lifecycle:, auto_pause:)
+        raw_lifecycle = lifecycle || {
+          on_timeout: auto_pause ? "pause" : "kill",
+          auto_resume: false
+        }
+
+        on_timeout = raw_lifecycle[:on_timeout] || raw_lifecycle["on_timeout"] || "kill"
+        unless %w[kill pause].include?(on_timeout)
+          raise ArgumentError, "Lifecycle on_timeout must be 'kill' or 'pause'"
+        end
+
+        auto_resume = if raw_lifecycle.key?(:auto_resume)
+                        raw_lifecycle[:auto_resume]
+                      else
+                        raw_lifecycle["auto_resume"]
+                      end
+
+        {
+          on_timeout: on_timeout,
+          auto_resume: on_timeout == "pause" ? !!auto_resume : false
+        }
+      end
+
       def resolve_credentials(api_key:, access_token:)
         resolved_api_key = api_key || E2B.configuration&.api_key || ENV["E2B_API_KEY"]
         resolved_access_token = access_token || E2B.configuration&.access_token || ENV["E2B_ACCESS_TOKEN"]
@@ -248,7 +291,7 @@ module E2B
       return false if @end_at && Time.now >= @end_at
 
       get_info
-      true
+      @state != "paused"
     rescue NotFoundError, E2BError
       false
     end
@@ -274,14 +317,14 @@ module E2B
     # Pause the sandbox (saves state for later resume)
     def pause
       @http_client.post("/sandboxes/#{@sandbox_id}/pause")
+      @state = "paused"
     end
 
     # Resume a paused sandbox
     #
     # @param timeout [Integer, nil] New timeout in seconds
     def resume(timeout: nil)
-      body = {}
-      body[:timeout] = timeout if timeout
+      body = { timeout: timeout || DEFAULT_TIMEOUT }
 
       response = @http_client.post("/sandboxes/#{@sandbox_id}/connect", body: body)
       process_sandbox_data(response) if response.is_a?(Hash)
@@ -393,9 +436,12 @@ module E2B
       @cpu_count = data["cpuCount"] || data["cpu_count"] || data[:cpuCount]
       @memory_mb = data["memoryMB"] || data["memory_mb"] || data[:memoryMB]
       @metadata = data["metadata"] || data[:metadata] || {}
+      @state = data["state"] || data[:state] || @state
       @domain = data["domain"] || data[:domain] || @domain
 
+      @envd_version = data["envdVersion"] || data["envd_version"] || data[:envdVersion] || @envd_version
       @envd_access_token = data["envdAccessToken"] || data["envd_access_token"] || data[:envdAccessToken] || @envd_access_token
+      @traffic_access_token = data["trafficAccessToken"] || data["traffic_access_token"] || data[:trafficAccessToken] || @traffic_access_token
 
       @started_at = parse_time(data["startedAt"] || data["started_at"] || data[:startedAt])
       @end_at = parse_time(data["endAt"] || data["end_at"] || data[:endAt])

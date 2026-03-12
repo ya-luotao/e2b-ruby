@@ -22,9 +22,12 @@ RSpec.describe E2B::Client do
             templateID: "python",
             timeout: 9,
             metadata: { "purpose" => "test" },
-            envVars: { "RUBYOPT" => "-w" }
+            envVars: { "RUBYOPT" => "-w" },
+            secure: true,
+            allow_internet_access: true,
+            autoPause: false
           },
-          timeout: 120
+          timeout: 60
         )
         .and_return(
           {
@@ -50,7 +53,17 @@ RSpec.describe E2B::Client do
 
     it "falls back to the configured sandbox timeout when no timeout is provided" do
       allow(http_client).to receive(:post)
-        .with("/sandboxes", body: { templateID: "base", timeout: 17 }, timeout: 120)
+        .with(
+          "/sandboxes",
+          body: {
+            templateID: "base",
+            timeout: 17,
+            secure: true,
+            allow_internet_access: true,
+            autoPause: false
+          },
+          timeout: 60
+        )
         .and_return({ "sandboxID" => "sbx_123" })
 
       client = described_class.new(api_key: "api-key", sandbox_timeout_ms: 17_000)
@@ -70,13 +83,60 @@ RSpec.describe E2B::Client do
         .and_return(http_client)
 
       allow(http_client).to receive(:post)
-        .with("/sandboxes", body: { templateID: "base", timeout: 300 }, timeout: 120)
+        .with(
+          "/sandboxes",
+          body: {
+            templateID: "base",
+            timeout: 300,
+            secure: true,
+            allow_internet_access: true,
+            autoPause: false
+          },
+          timeout: 60
+        )
         .and_return({ "sandboxID" => "sbx_123" })
 
       client = described_class.new(access_token: "access-token", domain: "team.e2b.test")
       sandbox = client.create
 
       expect(sandbox.get_url(3000)).to eq("https://3000-sbx_123.team.e2b.test")
+    end
+
+    it "serializes lifecycle and network create options" do
+      allow(http_client).to receive(:post)
+        .with(
+          "/sandboxes",
+          body: {
+            templateID: "base",
+            timeout: 300,
+            secure: false,
+            allow_internet_access: false,
+            network: {
+              deny_out: [E2B::ALL_TRAFFIC],
+              allow_public_traffic: false
+            },
+            autoPause: true,
+            autoResume: { enabled: false }
+          },
+          timeout: 60
+        )
+        .and_return({
+          "sandboxID" => "sbx_123",
+          "trafficAccessToken" => "traffic-token"
+        })
+
+      client = described_class.new(api_key: "api-key")
+      sandbox = client.create(
+        secure: false,
+        allow_internet_access: false,
+        network: {
+          deny_out: [E2B::ALL_TRAFFIC],
+          allow_public_traffic: false
+        },
+        auto_pause: true
+      )
+
+      expect(sandbox.traffic_access_token).to eq("traffic-token")
     end
   end
 

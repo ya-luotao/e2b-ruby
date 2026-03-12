@@ -45,7 +45,9 @@ module E2B
     # @param metadata [Hash, nil] Custom metadata
     # @param envs [Hash{String => String}, nil] Environment variables
     # @return [Sandbox] The created sandbox instance
-    def create(template: "base", timeout: nil, timeout_ms: nil, metadata: nil, envs: nil, **_opts)
+    def create(template: "base", timeout: nil, timeout_ms: nil, metadata: nil, envs: nil,
+               secure: true, allow_internet_access: true, network: nil,
+               lifecycle: nil, auto_pause: nil, request_timeout: nil, **_opts)
       # Support both seconds and milliseconds for backward compat
       timeout_seconds = if timeout
                           timeout
@@ -54,15 +56,24 @@ module E2B
                         else
                           (@config.sandbox_timeout_ms / 1000).to_i
                         end
+      template ||= @config.default_template || "base"
+      lifecycle = normalized_lifecycle(lifecycle: lifecycle, auto_pause: auto_pause)
 
       body = {
         templateID: template,
-        timeout: timeout_seconds
+        timeout: timeout_seconds,
+        secure: secure,
+        allow_internet_access: allow_internet_access,
+        autoPause: lifecycle[:on_timeout] == "pause"
       }
       body[:metadata] = metadata if metadata
       body[:envVars] = envs if envs
+      body[:network] = network if network
+      if body[:autoPause]
+        body[:autoResume] = { enabled: lifecycle[:auto_resume] }
+      end
 
-      response = @http_client.post("/sandboxes", body: body, timeout: 120)
+      response = @http_client.post("/sandboxes", body: body, timeout: request_timeout || @config.request_timeout || 120)
 
       Sandbox.new(
         sandbox_data: response,
@@ -168,8 +179,8 @@ module E2B
     # @param timeout [Integer, nil] New timeout in seconds
     # @return [Sandbox]
     def resume(sandbox_id, timeout: nil)
-      body = {}
-      body[:timeout] = timeout if timeout
+      timeout_seconds = timeout || ((@config.sandbox_timeout_ms || (Sandbox::DEFAULT_TIMEOUT * 1000)) / 1000).to_i
+      body = { timeout: timeout_seconds }
 
       response = @http_client.post("/sandboxes/#{sandbox_id}/connect", body: body)
 
@@ -182,6 +193,29 @@ module E2B
     end
 
     private
+
+    def normalized_lifecycle(lifecycle:, auto_pause:)
+      raw_lifecycle = lifecycle || {
+        on_timeout: auto_pause ? "pause" : "kill",
+        auto_resume: false
+      }
+
+      on_timeout = raw_lifecycle[:on_timeout] || raw_lifecycle["on_timeout"] || "kill"
+      unless %w[kill pause].include?(on_timeout)
+        raise ArgumentError, "Lifecycle on_timeout must be 'kill' or 'pause'"
+      end
+
+      auto_resume = if raw_lifecycle.key?(:auto_resume)
+                      raw_lifecycle[:auto_resume]
+                    else
+                      raw_lifecycle["auto_resume"]
+                    end
+
+      {
+        on_timeout: on_timeout,
+        auto_resume: on_timeout == "pause" ? !!auto_resume : false
+      }
+    end
 
     def resolve_config(config_or_options)
       case config_or_options

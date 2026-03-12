@@ -30,7 +30,10 @@ RSpec.describe E2B::Sandbox do
             templateID: "base",
             timeout: 600,
             metadata: { "env" => "test" },
-            envVars: { "FOO" => "bar" }
+            envVars: { "FOO" => "bar" },
+            secure: true,
+            allow_internet_access: true,
+            autoPause: false
           },
           timeout: 45
         )
@@ -58,6 +61,51 @@ RSpec.describe E2B::Sandbox do
       expect(sandbox.alias_name).to eq("runner")
       expect(sandbox.metadata).to eq({ "env" => "test" })
       expect(sandbox.get_url(3000)).to eq("https://3000-sbx_123.remote.e2b.test")
+    end
+
+    it "serializes lifecycle and network create options and exposes returned traffic access data" do
+      expect(E2B::API::HttpClient).to receive(:new).and_return(http_client)
+
+      allow(http_client).to receive(:post)
+        .with(
+          "/sandboxes",
+          body: {
+            templateID: "base",
+            timeout: 300,
+            secure: false,
+            allow_internet_access: false,
+            network: {
+              deny_out: [E2B::ALL_TRAFFIC],
+              allow_public_traffic: false
+            },
+            autoPause: true,
+            autoResume: { enabled: true }
+          },
+          timeout: 120
+        )
+        .and_return(
+          {
+            "sandboxID" => "sbx_123",
+            "state" => "running",
+            "envdVersion" => "0.2.0",
+            "trafficAccessToken" => "traffic-token"
+          }
+        )
+
+      sandbox = described_class.create(
+        api_key: "api-key",
+        secure: false,
+        allow_internet_access: false,
+        network: {
+          deny_out: [E2B::ALL_TRAFFIC],
+          allow_public_traffic: false
+        },
+        lifecycle: { on_timeout: "pause", auto_resume: true }
+      )
+
+      expect(sandbox.state).to eq("running")
+      expect(sandbox.envd_version).to eq("0.2.0")
+      expect(sandbox.traffic_access_token).to eq("traffic-token")
     end
 
     it "accepts access-token authentication without an API key" do
@@ -188,6 +236,20 @@ RSpec.describe E2B::Sandbox do
       allow(http_client).to receive(:get).with("/sandboxes/sbx_123").and_raise(E2B::NotFoundError, "gone")
 
       expect(sandbox.running?).to be(false)
+    end
+
+    it "returns false when the control plane reports the sandbox as paused" do
+      allow(Time).to receive(:now).and_return(Time.parse("2026-03-11T23:59:00Z"))
+      allow(http_client).to receive(:get).with("/sandboxes/sbx_123").and_return(
+        {
+          "sandboxID" => "sbx_123",
+          "state" => "paused",
+          "endAt" => "2026-03-12T00:00:00Z"
+        }
+      )
+
+      expect(sandbox.running?).to be(false)
+      expect(sandbox.state).to eq("paused")
     end
   end
 
