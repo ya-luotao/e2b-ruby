@@ -393,6 +393,14 @@ module E2B
     # Resume a paused sandbox
     #
     # @param timeout [Integer, nil] New timeout in seconds
+    def connect(timeout: nil)
+      resume(timeout: timeout)
+      self
+    end
+
+    # Resume a paused sandbox
+    #
+    # @param timeout [Integer, nil] New timeout in seconds
     def resume(timeout: nil)
       body = { timeout: timeout || DEFAULT_TIMEOUT }
 

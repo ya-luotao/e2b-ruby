@@ -286,6 +286,20 @@ RSpec.describe E2B::Client do
     end
   end
 
+  describe "#create_snapshot" do
+    it "wraps the created snapshot in SnapshotInfo" do
+      allow(http_client).to receive(:post)
+        .with("/sandboxes/sbx_123/snapshots")
+        .and_return({ "snapshotID" => "snap_123" })
+
+      client = described_class.new(api_key: "api-key")
+      snapshot = client.create_snapshot("sbx_123")
+
+      expect(snapshot).to be_a(E2B::Models::SnapshotInfo)
+      expect(snapshot.snapshot_id).to eq("snap_123")
+    end
+  end
+
   describe "#delete_snapshot" do
     it "treats missing snapshots as not deleted" do
       allow(http_client).to receive(:delete).with("/templates/snap_missing").and_raise(E2B::NotFoundError, "missing")

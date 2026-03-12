@@ -414,6 +414,25 @@ RSpec.describe E2B::Sandbox do
     end
   end
 
+  describe "#connect" do
+    subject(:sandbox) do
+      described_class.new(
+        sandbox_data: { "sandboxID" => "sbx_123" },
+        http_client: http_client,
+        api_key: "api-key"
+      )
+    end
+
+    it "reuses the connect endpoint and returns self" do
+      allow(http_client).to receive(:post)
+        .with("/sandboxes/sbx_123/connect", body: { timeout: 30 })
+        .and_return({ "sandboxID" => "sbx_123", "state" => "running" })
+
+      expect(sandbox.connect(timeout: 30)).to equal(sandbox)
+      expect(sandbox.state).to eq("running")
+    end
+  end
+
   describe "#get_mcp_token" do
     subject(:sandbox) do
       described_class.new(

@@ -189,6 +189,15 @@ module E2B
       )
     end
 
+    # Create a snapshot from an existing sandbox.
+    #
+    # @param sandbox_id [String] Source sandbox ID
+    # @return [Models::SnapshotInfo]
+    def create_snapshot(sandbox_id)
+      response = @http_client.post("/sandboxes/#{sandbox_id}/snapshots")
+      Models::SnapshotInfo.from_hash(response)
+    end
+
     # List snapshots for the team, optionally filtered by source sandbox.
     #
     # @param sandbox_id [String, nil] Filter snapshots by source sandbox ID
