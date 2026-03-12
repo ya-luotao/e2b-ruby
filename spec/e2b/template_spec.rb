@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe E2B::Template do
   let(:http_client) { instance_double(E2B::API::HttpClient) }
@@ -210,6 +211,87 @@ RSpec.describe E2B::Template do
       expect {
         described_class.wait_for_build_finish(build_info, api_key: "api-key")
       }.to raise_error(E2B::BuildError, "Build failed")
+    end
+  end
+
+  describe "builder serialization" do
+    it "serializes image-based templates to hashes and Dockerfiles" do
+      template = described_class.new
+        .from_python_image("3.12")
+        .copy("app.rb", "/app/")
+        .run_cmd("bundle install", user: "root")
+        .set_workdir("/app")
+        .set_user("app")
+        .set_envs("RACK_ENV" => "production", "PORT" => 3000)
+        .set_start_cmd("bundle exec ruby app.rb", "test -f /tmp/ready")
+
+      expect(template.to_h).to eq(
+        fromImage: "python:3.12",
+        startCmd: "bundle exec ruby app.rb",
+        readyCmd: "test -f /tmp/ready",
+        force: false,
+        steps: [
+          { type: "COPY", args: ["app.rb", "/app/", "", ""], force: false },
+          { type: "RUN", args: ["bundle install", "root"], force: false },
+          { type: "WORKDIR", args: ["/app"], force: false },
+          { type: "USER", args: ["app"], force: false },
+          { type: "ENV", args: ["RACK_ENV", "production", "PORT", "3000"], force: false }
+        ]
+      )
+
+      expect(described_class.to_dockerfile(template)).to eq(<<~DOCKERFILE)
+        FROM python:3.12
+        COPY app.rb /app/
+        RUN bundle install
+        WORKDIR /app
+        USER app
+        ENV RACK_ENV=production PORT=3000
+        ENTRYPOINT bundle exec ruby app.rb
+      DOCKERFILE
+    end
+
+    it "marks subsequent steps as forced after skip_cache" do
+      template = described_class.new
+        .skip_cache
+        .from_base_image
+        .run_cmd("echo hi")
+
+      expect(template.to_h).to eq(
+        fromImage: "e2bdev/base",
+        force: true,
+        steps: [
+          { type: "RUN", args: ["echo hi", ""], force: true }
+        ]
+      )
+    end
+
+    it "computes file hashes for copy steps" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
+        template = described_class.new(file_context_path: dir)
+          .from_base_image
+          .copy("app.rb", "/app/")
+
+        payload = template.to_h(compute_hashes: true)
+
+        expect(payload[:steps].first[:filesHash]).to match(/\A\h{64}\z/)
+      end
+    end
+
+    it "rejects copy sources that escape the template context" do
+      template = described_class.new
+
+      expect {
+        template.copy("../secrets.txt", "/app/")
+      }.to raise_error(E2B::TemplateError, /path escapes the context directory/)
+    end
+
+    it "refuses to convert templates based on other templates to Dockerfiles" do
+      template = described_class.new.from_template("base-template")
+
+      expect {
+        template.to_dockerfile
+      }.to raise_error(E2B::TemplateError, /Cannot convert template built from another template to Dockerfile/)
     end
   end
 end
