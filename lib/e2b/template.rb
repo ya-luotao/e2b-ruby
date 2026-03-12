@@ -3,6 +3,8 @@
 require "digest"
 require "json"
 require "pathname"
+require "rubygems/package"
+require "stringio"
 require "uri"
 
 module E2B
@@ -116,7 +118,170 @@ module E2B
         end
       end
 
+      def build(template, name: nil, alias_name: nil, tags: nil, cpu_count: 2, memory_mb: 1024, skip_cache: false,
+                on_build_logs: nil, api_key: nil, access_token: nil, domain: nil)
+        build_info = build_in_background(
+          template,
+          name: name,
+          alias_name: alias_name,
+          tags: tags,
+          cpu_count: cpu_count,
+          memory_mb: memory_mb,
+          skip_cache: skip_cache,
+          on_build_logs: on_build_logs,
+          api_key: api_key,
+          access_token: access_token,
+          domain: domain
+        )
+
+        on_build_logs&.call(log_entry("Waiting for logs..."))
+
+        wait_for_build_finish(
+          build_info,
+          on_build_logs: on_build_logs,
+          api_key: api_key,
+          access_token: access_token,
+          domain: domain
+        )
+
+        build_info
+      end
+
+      def build_in_background(template, name: nil, alias_name: nil, tags: nil, cpu_count: 2, memory_mb: 1024,
+                              skip_cache: false, on_build_logs: nil, api_key: nil, access_token: nil, domain: nil)
+        resolved_name = normalize_build_name(name: name, alias_name: alias_name)
+        template.send(:force_build!) if skip_cache
+
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
+        http_client = build_http_client(**credentials, domain: resolve_domain(domain))
+
+        tags_message = Array(tags).any? ? " with tags #{Array(tags).join(', ')}" : ""
+        on_build_logs&.call(log_entry("Requesting build for template: #{resolved_name}#{tags_message}"))
+
+        create_response = http_client.post("/v3/templates", body: {
+          name: resolved_name,
+          tags: tags,
+          cpuCount: cpu_count,
+          memoryMB: memory_mb
+        })
+
+        build_info = Models::BuildInfo.new(
+          alias_name: resolved_name,
+          name: resolved_name,
+          tags: create_response["tags"] || create_response[:tags] || [],
+          template_id: create_response["templateID"] || create_response[:templateID],
+          build_id: create_response["buildID"] || create_response[:buildID]
+        )
+
+        on_build_logs&.call(
+          log_entry("Template created with ID: #{build_info.template_id}, Build ID: #{build_info.build_id}")
+        )
+
+        instructions = template.send(:instructions_with_hash_metadata)
+        upload_copy_instructions(
+          http_client,
+          template,
+          build_info,
+          instructions,
+          on_build_logs: on_build_logs
+        )
+
+        on_build_logs&.call(log_entry("All file uploads completed"))
+        on_build_logs&.call(log_entry("Starting building..."))
+
+        http_client.post(
+          "/v2/templates/#{escape_path_segment(build_info.template_id)}/builds/#{escape_path_segment(build_info.build_id)}",
+          body: template.send(:build_payload, instructions)
+        )
+
+        build_info
+      end
+
       private
+
+      def normalize_build_name(name:, alias_name:)
+        resolved_name = name || alias_name
+        return resolved_name if resolved_name && !resolved_name.empty?
+
+        raise TemplateError, "Name must be provided"
+      end
+
+      def upload_copy_instructions(http_client, template, build_info, instructions, on_build_logs:)
+        instructions.each do |instruction|
+          next unless instruction[:type] == "COPY"
+
+          src = instruction[:args][0]
+          files_hash = instruction[:filesHash]
+          response = http_client.get(
+            "/templates/#{escape_path_segment(build_info.template_id)}/files/#{escape_path_segment(files_hash)}"
+          )
+          present = response["present"]
+          url = response["url"]
+
+          if (instruction[:forceUpload] && url) || (present == false && url)
+            upload_file(
+              template,
+              file_name: src,
+              url: url,
+              resolve_symlinks: instruction[:resolveSymlinks].nil? ? true : instruction[:resolveSymlinks]
+            )
+            on_build_logs&.call(log_entry("Uploaded '#{src}'"))
+          else
+            on_build_logs&.call(log_entry("Skipping upload of '#{src}', already cached"))
+          end
+        end
+      end
+
+      def upload_file(template, file_name:, url:, resolve_symlinks:)
+        tarball = build_tar_archive(template, file_name, resolve_symlinks: resolve_symlinks)
+        response = Faraday.put(url) do |req|
+          req.headers["Content-Type"] = "application/octet-stream"
+          req.body = tarball
+        end
+
+        return if response.success?
+
+        raise BuildError, "Failed to upload file: #{response.status}"
+      rescue Faraday::Error => e
+        raise BuildError, "Failed to upload file: #{e.message}"
+      end
+
+      def build_tar_archive(template, file_name, resolve_symlinks:)
+        context_path = template.send(:file_context_path)
+        files = template.send(:collect_files, file_name)
+        output = StringIO.new
+
+        Gem::Package::TarWriter.new(output) do |tar|
+          files.each do |file|
+            relative = Pathname.new(file).relative_path_from(Pathname.new(context_path)).to_s
+
+            if File.symlink?(file) && !resolve_symlinks
+              tar.add_symlink(relative, File.readlink(file), File.lstat(file).mode)
+              next
+            end
+
+            stat = File.stat(file)
+            if File.directory?(file)
+              tar.mkdir(relative, stat.mode)
+            elsif File.file?(file)
+              tar.add_file_simple(relative, stat.mode, stat.size) do |io|
+                io.write(File.binread(file))
+              end
+            end
+          end
+        end
+
+        output.rewind
+        output.string
+      end
+
+      def log_entry(message, level = "info")
+        Models::TemplateLogEntry.new(
+          timestamp: Time.now,
+          level: level,
+          message: message
+        )
+      end
 
       def normalize_tags(tags)
         Array(tags).flatten.compact
@@ -321,17 +486,7 @@ module E2B
     end
 
     def to_h(compute_hashes: false)
-      steps = compute_hashes ? instructions_with_hashes : serialized_steps(@instructions)
-      template_data = {
-        steps: steps,
-        force: @force
-      }
-      template_data[:fromImage] = @base_image if @base_image
-      template_data[:fromTemplate] = @base_template if @base_template
-      template_data[:fromImageRegistry] = @registry_config if @registry_config
-      template_data[:startCmd] = @start_cmd if @start_cmd
-      template_data[:readyCmd] = @ready_cmd if @ready_cmd
-      template_data
+      build_payload(compute_hashes ? instructions_with_hash_metadata : @instructions)
     end
 
     def to_json(compute_hashes: false)
@@ -364,25 +519,48 @@ module E2B
       dockerfile
     end
 
+    protected
+
+    attr_reader :file_context_path
+
     private
+
+    def force_build!
+      @force = true
+    end
+
+    def build_payload(instructions)
+      template_data = {
+        steps: serialized_steps(instructions),
+        force: @force
+      }
+      template_data[:fromImage] = @base_image if @base_image
+      template_data[:fromTemplate] = @base_template if @base_template
+      template_data[:fromImageRegistry] = @registry_config if @registry_config
+      template_data[:startCmd] = @start_cmd if @start_cmd
+      template_data[:readyCmd] = @ready_cmd if @ready_cmd
+      template_data
+    end
 
     def serialized_steps(steps)
       steps.map { |instruction| serialized_step(instruction) }
     end
 
     def instructions_with_hashes
+      serialized_steps(instructions_with_hash_metadata)
+    end
+
+    def instructions_with_hash_metadata
       @instructions.map do |instruction|
-        step = serialized_step(instruction)
-        next step unless instruction[:type] == "COPY"
+        next instruction unless instruction[:type] == "COPY"
 
         src = instruction[:args][0]
         dest = instruction[:args][1]
-        step[:filesHash] = calculate_files_hash(
+        instruction.merge(filesHash: calculate_files_hash(
           src,
           dest,
           resolve_symlinks: instruction[:resolveSymlinks].nil? ? true : instruction[:resolveSymlinks]
-        )
-        step
+        ))
       end
     end
 

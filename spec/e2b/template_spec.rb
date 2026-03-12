@@ -294,4 +294,101 @@ RSpec.describe E2B::Template do
       }.to raise_error(E2B::TemplateError, /Cannot convert template built from another template to Dockerfile/)
     end
   end
+
+  describe ".build_in_background" do
+    it "requests, uploads, and triggers template builds" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
+        template = described_class.new(file_context_path: dir)
+          .from_base_image
+          .copy("app.rb", "/app/")
+
+        payload = template.to_h(compute_hashes: true)
+        files_hash = payload[:steps].first[:filesHash]
+        logs = []
+
+        allow(http_client).to receive(:post)
+          .with(
+            "/v3/templates",
+            body: {
+              name: "my-template",
+              tags: ["stable"],
+              cpuCount: 2,
+              memoryMB: 1024
+            }
+          )
+          .and_return({
+            "templateID" => "tpl_123",
+            "buildID" => "bld_123",
+            "tags" => ["stable"]
+          })
+        allow(http_client).to receive(:get)
+          .with("/templates/tpl_123/files/#{files_hash}")
+          .and_return({
+            "present" => false,
+            "url" => "https://upload.example.test/template"
+          })
+        allow(described_class).to receive(:upload_file)
+        expect(http_client).to receive(:post)
+          .with("/v2/templates/tpl_123/builds/bld_123", body: payload)
+
+        build_info = described_class.build_in_background(
+          template,
+          name: "my-template",
+          tags: ["stable"],
+          api_key: "api-key",
+          on_build_logs: ->(entry) { logs << entry.message }
+        )
+
+        expect(build_info).to be_a(E2B::Models::BuildInfo)
+        expect(build_info.template_id).to eq("tpl_123")
+        expect(build_info.build_id).to eq("bld_123")
+        expect(described_class).to have_received(:upload_file).with(
+          template,
+          file_name: "app.rb",
+          url: "https://upload.example.test/template",
+          resolve_symlinks: true
+        )
+        expect(logs).to include(
+          "Requesting build for template: my-template with tags stable",
+          "Template created with ID: tpl_123, Build ID: bld_123",
+          "Uploaded 'app.rb'",
+          "All file uploads completed",
+          "Starting building..."
+        )
+      end
+    end
+  end
+
+  describe ".build" do
+    it "waits for the build to finish after triggering it in the background" do
+      build_info = E2B::Models::BuildInfo.new(
+        alias_name: "my-template",
+        name: "my-template",
+        tags: ["stable"],
+        template_id: "tpl_123",
+        build_id: "bld_123"
+      )
+      allow(described_class).to receive(:build_in_background).and_return(build_info)
+      allow(described_class).to receive(:wait_for_build_finish)
+
+      logs = []
+      result = described_class.build(
+        described_class.new.from_base_image,
+        name: "my-template",
+        api_key: "api-key",
+        on_build_logs: ->(entry) { logs << entry.message }
+      )
+
+      expect(result).to eq(build_info)
+      expect(described_class).to have_received(:wait_for_build_finish).with(
+        build_info,
+        on_build_logs: kind_of(Proc),
+        api_key: "api-key",
+        access_token: nil,
+        domain: nil
+      )
+      expect(logs).to include("Waiting for logs...")
+    end
+  end
 end
