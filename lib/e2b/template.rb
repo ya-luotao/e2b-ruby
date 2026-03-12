@@ -12,7 +12,7 @@ module E2B
     DEFAULT_BASE_IMAGE = "e2bdev/base"
 
     class << self
-      def to_json(template, compute_hashes: false)
+      def to_json(template, compute_hashes: true)
         template.to_json(compute_hashes: compute_hashes)
       end
 
@@ -119,13 +119,13 @@ module E2B
       end
 
       def build(template, name: nil, alias_name: nil, tags: nil, cpu_count: 2, memory_mb: 1024, skip_cache: false,
-                on_build_logs: nil, api_key: nil, access_token: nil, domain: nil)
+                on_build_logs: nil, api_key: nil, access_token: nil, domain: nil, **opts)
         on_build_logs&.call(Models::TemplateLogEntryStart.new(timestamp: Time.now, message: "Build started"))
 
         build_info = build_in_background(
           template,
           name: name,
-          alias_name: alias_name,
+          alias_name: alias_name || opts[:alias] || opts["alias"],
           tags: tags,
           cpu_count: cpu_count,
           memory_mb: memory_mb,
@@ -152,7 +152,8 @@ module E2B
       end
 
       def build_in_background(template, name: nil, alias_name: nil, tags: nil, cpu_count: 2, memory_mb: 1024,
-                              skip_cache: false, on_build_logs: nil, api_key: nil, access_token: nil, domain: nil)
+                              skip_cache: false, on_build_logs: nil, api_key: nil, access_token: nil, domain: nil, **opts)
+        alias_name ||= opts[:alias] || opts["alias"]
         resolved_name = normalize_build_name(name: name, alias_name: alias_name)
         template.send(:force_build!) if skip_cache
 
@@ -348,8 +349,8 @@ module E2B
       end
     end
 
-    def initialize(file_context_path: Dir.pwd, file_ignore_patterns: [])
-      @file_context_path = file_context_path.to_s
+    def initialize(file_context_path: nil, file_ignore_patterns: [])
+      @file_context_path = (file_context_path || default_file_context_path).to_s
       @file_ignore_patterns = Array(file_ignore_patterns)
       @base_image = DEFAULT_BASE_IMAGE
       @base_template = nil
@@ -644,7 +645,7 @@ module E2B
       build_payload(compute_hashes ? instructions_with_hash_metadata : @instructions)
     end
 
-    def to_json(compute_hashes: false)
+    def to_json(compute_hashes: true)
       JSON.pretty_generate(to_h(compute_hashes: compute_hashes))
     end
 
@@ -834,6 +835,19 @@ module E2B
       return JSON.generate(path_or_content) unless path_or_content.is_a?(String)
 
       File.read(File.join(@file_context_path, path_or_content))
+    end
+
+    def default_file_context_path
+      location = caller_locations(2, 20).find do |entry|
+        path = entry.absolute_path || entry.path
+        next false unless path
+
+        !path.include?("/lib/e2b/")
+      end
+
+      return File.dirname(location.absolute_path || location.path) if location
+
+      Dir.pwd
     end
 
     def normalize_ready_cmd(ready_cmd)

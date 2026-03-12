@@ -257,6 +257,14 @@ RSpec.describe E2B::Template do
     end
   end
 
+  describe "template defaults" do
+    it "uses the caller file directory as the default file context path" do
+      template = described_class.new
+
+      expect(template.send(:file_context_path)).to eq(File.dirname(__FILE__))
+    end
+  end
+
   describe "builder serialization" do
     it "serializes image-based templates to hashes and Dockerfiles" do
       template = described_class.new
@@ -328,6 +336,19 @@ RSpec.describe E2B::Template do
         payload = template.to_h(compute_hashes: true)
 
         expect(payload[:steps].first[:filesHash]).to match(/\A\h{64}\z/)
+      end
+    end
+
+    it "includes file hashes in JSON output by default" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
+        template = described_class.new(file_context_path: dir)
+          .from_base_image
+          .copy("app.rb", "/app/")
+
+        json = described_class.to_json(template)
+
+        expect(json).to include("\"filesHash\"")
       end
     end
 
@@ -635,6 +656,38 @@ RSpec.describe E2B::Template do
       expect(logs.first).to eq("Build started")
       expect(logs).to include("Waiting for logs...")
       expect(logs.last).to eq("Build finished")
+    end
+
+    it "accepts the deprecated alias option for build parity" do
+      build_info = E2B::Models::BuildInfo.new(
+        alias_name: "my-template",
+        name: "my-template",
+        tags: [],
+        template_id: "tpl_123",
+        build_id: "bld_123"
+      )
+      allow(described_class).to receive(:build_in_background).and_return(build_info)
+      allow(described_class).to receive(:wait_for_build_finish)
+
+      result = described_class.build(
+        described_class.new.from_base_image,
+        **{ alias: "my-template", api_key: "api-key" }
+      )
+
+      expect(result).to eq(build_info)
+      expect(described_class).to have_received(:build_in_background).with(
+        kind_of(E2B::Template),
+        name: nil,
+        alias_name: "my-template",
+        tags: nil,
+        cpu_count: 2,
+        memory_mb: 1024,
+        skip_cache: false,
+        on_build_logs: nil,
+        api_key: "api-key",
+        access_token: nil,
+        domain: nil
+      )
     end
   end
 end
