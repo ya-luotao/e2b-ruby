@@ -74,10 +74,12 @@ sandbox.kill
 
 ## Configuration
 
-```ruby
+```bash
 # Option 1: Environment variable (recommended)
 export E2B_API_KEY=your-api-key
+```
 
+```ruby
 # Option 2: Global configuration
 E2B.configure do |config|
   config.api_key = 'your-api-key'
@@ -152,6 +154,8 @@ sandbox = client.create(template: "base")
 | `send_stdin(pid, data)` | Send input to PTY |
 | `kill(pid)` | Kill PTY process |
 | `resize(pid, size)` | Resize terminal |
+| `close_stdin(pid)` | Close PTY stdin (send EOF) |
+| `list` | List running processes |
 
 ### Git (`sandbox.git`)
 
@@ -166,8 +170,11 @@ sandbox = client.create(template: "base")
 | `push(path, remote:, branch:, username:, password:)` | Push to remote |
 | `pull(path, remote:, branch:, username:, password:)` | Pull from remote |
 | `create_branch` / `checkout_branch` / `delete_branch` | Branch management |
+| `remote_add(path, name, url)` / `remote_get(path, name)` | Remote management |
+| `reset(path, mode:, target:)` / `restore(path, paths)` | Reset/restore changes |
 | `set_config` / `get_config` | Git configuration |
 | `configure_user(name, email)` | Set user name/email |
+| `dangerously_authenticate(username, password)` | Store credentials globally |
 
 ## License
 
