@@ -47,7 +47,7 @@ module E2B
     # @return [Sandbox] The created sandbox instance
     def create(template: "base", timeout: nil, timeout_ms: nil, metadata: nil, envs: nil,
                secure: true, allow_internet_access: true, network: nil,
-               lifecycle: nil, auto_pause: nil, request_timeout: nil, **_opts)
+               lifecycle: nil, auto_pause: nil, mcp: nil, request_timeout: nil, **_opts)
       # Support both seconds and milliseconds for backward compat
       timeout_seconds = if timeout
                           timeout
@@ -56,7 +56,7 @@ module E2B
                         else
                           (@config.sandbox_timeout_ms / 1000).to_i
                         end
-      template ||= @config.default_template || "base"
+      template = resolved_template(template, mcp: mcp)
       lifecycle = normalized_lifecycle(lifecycle: lifecycle, auto_pause: auto_pause)
 
       body = {
@@ -68,6 +68,7 @@ module E2B
       }
       body[:metadata] = metadata if metadata
       body[:envVars] = envs if envs
+      body[:mcp] = mcp if mcp
       body[:network] = network if network
       if body[:autoPause]
         body[:autoResume] = { enabled: lifecycle[:auto_resume] }
@@ -75,12 +76,16 @@ module E2B
 
       response = @http_client.post("/sandboxes", body: body, timeout: request_timeout || @config.request_timeout || 120)
 
-      Sandbox.new(
+      sandbox = Sandbox.new(
         sandbox_data: response,
         http_client: @http_client,
         api_key: @config.api_key,
         domain: @domain
       )
+
+      start_mcp_gateway(sandbox, mcp) if mcp
+
+      sandbox
     end
 
     # Connect to an existing sandbox
@@ -209,6 +214,14 @@ module E2B
 
     private
 
+    def resolved_template(template, mcp:)
+      return template unless template.nil? || template.empty?
+
+      return Sandbox::DEFAULT_MCP_TEMPLATE if mcp
+
+      @config.default_template || "base"
+    end
+
     def normalized_lifecycle(lifecycle:, auto_pause:)
       raw_lifecycle = lifecycle || {
         on_timeout: auto_pause ? "pause" : "kill",
@@ -230,6 +243,16 @@ module E2B
         on_timeout: on_timeout,
         auto_resume: on_timeout == "pause" ? !!auto_resume : false
       }
+    end
+
+    def start_mcp_gateway(sandbox, mcp)
+      token = SecureRandom.uuid
+      sandbox.instance_variable_set(:@mcp_token, token)
+      sandbox.commands.run(
+        "mcp-gateway --config '#{JSON.generate(mcp)}'",
+        user: "root",
+        envs: { "GATEWAY_ACCESS_TOKEN" => token }
+      )
     end
 
     def resolve_config(config_or_options)

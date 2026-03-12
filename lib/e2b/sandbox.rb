@@ -4,6 +4,7 @@ require "time"
 require "securerandom"
 require "base64"
 require "digest"
+require "json"
 
 module E2B
   # Represents an E2B Sandbox instance
@@ -30,6 +31,12 @@ module E2B
 
     # Default sandbox timeout in seconds
     DEFAULT_TIMEOUT = 300
+
+    # Default template used when enabling MCP without an explicit template.
+    DEFAULT_MCP_TEMPLATE = "mcp-gateway"
+
+    # MCP gateway port.
+    MCP_PORT = 50005
 
     # @return [String] Unique sandbox ID
     attr_reader :sandbox_id
@@ -103,13 +110,13 @@ module E2B
       #   sandbox = E2B::Sandbox.create(template: "python", timeout: 600)
       def create(template: "base", timeout: DEFAULT_TIMEOUT, metadata: nil,
                  envs: nil, secure: true, allow_internet_access: true,
-                 network: nil, lifecycle: nil, auto_pause: nil,
+                 network: nil, lifecycle: nil, auto_pause: nil, mcp: nil,
                  api_key: nil, access_token: nil, domain: nil,
                  request_timeout: 120)
         credentials = resolve_credentials(api_key: api_key, access_token: access_token)
         domain = resolve_domain(domain)
         http_client = build_http_client(**credentials, domain: domain)
-        template ||= E2B.configuration&.default_template || "base"
+        template = resolved_template(template, mcp: mcp)
         lifecycle = normalized_lifecycle(lifecycle: lifecycle, auto_pause: auto_pause)
 
         body = {
@@ -121,6 +128,7 @@ module E2B
         }
         body[:metadata] = metadata if metadata
         body[:envVars] = envs if envs
+        body[:mcp] = mcp if mcp
         body[:network] = network if network
         if body[:autoPause]
           body[:autoResume] = { enabled: lifecycle[:auto_resume] }
@@ -128,12 +136,16 @@ module E2B
 
         response = http_client.post("/sandboxes", body: body, timeout: request_timeout)
 
-        new(
+        sandbox = new(
           sandbox_data: response,
           http_client: http_client,
           api_key: credentials[:api_key],
           domain: domain
         )
+
+        start_mcp_gateway(sandbox, mcp) if mcp
+
+        sandbox
       end
 
       # Connect to an existing running sandbox
@@ -224,6 +236,14 @@ module E2B
 
       private
 
+      def resolved_template(template, mcp:)
+        return template unless template.nil? || template.empty?
+
+        return DEFAULT_MCP_TEMPLATE if mcp
+
+        E2B.configuration&.default_template || "base"
+      end
+
       def normalized_lifecycle(lifecycle:, auto_pause:)
         raw_lifecycle = lifecycle || {
           on_timeout: auto_pause ? "pause" : "kill",
@@ -245,6 +265,16 @@ module E2B
           on_timeout: on_timeout,
           auto_resume: on_timeout == "pause" ? !!auto_resume : false
         }
+      end
+
+      def start_mcp_gateway(sandbox, mcp)
+        token = SecureRandom.uuid
+        sandbox.instance_variable_set(:@mcp_token, token)
+        sandbox.commands.run(
+          "mcp-gateway --config '#{JSON.generate(mcp)}'",
+          user: "root",
+          envs: { "GATEWAY_ACCESS_TOKEN" => token }
+        )
       end
 
       def resolve_credentials(api_key:, access_token:)
@@ -371,6 +401,20 @@ module E2B
         api_key: @api_key,
         domain: @domain
       )
+    end
+
+    # Get the MCP URL for the sandbox.
+    #
+    # @return [String]
+    def get_mcp_url
+      "https://#{get_host(MCP_PORT)}/mcp"
+    end
+
+    # Get the MCP token for the sandbox.
+    #
+    # @return [String, nil]
+    def get_mcp_token
+      @mcp_token ||= @files.read("/etc/mcp-gateway/.token", user: "root")
     end
 
     # Get the host string for a port (without protocol)

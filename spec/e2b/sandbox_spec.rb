@@ -108,6 +108,49 @@ RSpec.describe E2B::Sandbox do
       expect(sandbox.traffic_access_token).to eq("traffic-token")
     end
 
+    it "defaults to the MCP template and starts the gateway when mcp is enabled" do
+      expect(E2B::API::HttpClient).to receive(:new).and_return(http_client)
+      allow(SecureRandom).to receive(:uuid).and_return("mcp-token")
+      expect_any_instance_of(E2B::Services::Commands).to receive(:run)
+        .with(
+          "mcp-gateway --config '{\"server\":{\"url\":\"https://example.test\"}}'",
+          user: "root",
+          envs: { "GATEWAY_ACCESS_TOKEN" => "mcp-token" }
+        )
+        .and_return(E2B::Services::CommandResult.new(exit_code: 0))
+
+      allow(http_client).to receive(:post)
+        .with(
+          "/sandboxes",
+          body: {
+            templateID: "mcp-gateway",
+            timeout: 300,
+            secure: true,
+            allow_internet_access: true,
+            autoPause: false,
+            mcp: {
+              server: {
+                url: "https://example.test"
+              }
+            }
+          },
+          timeout: 120
+        )
+        .and_return({ "sandboxID" => "sbx_123", "domain" => "remote.e2b.test" })
+
+      sandbox = described_class.create(
+        api_key: "api-key",
+        template: nil,
+        mcp: {
+          server: {
+            url: "https://example.test"
+          }
+        }
+      )
+
+      expect(sandbox.get_mcp_url).to eq("https://50005-sbx_123.remote.e2b.test/mcp")
+    end
+
     it "accepts access-token authentication without an API key" do
       expect(E2B::API::HttpClient).to receive(:new)
         .with(
@@ -347,6 +390,26 @@ RSpec.describe E2B::Sandbox do
 
       expect(snapshot).to be_a(E2B::Models::SnapshotInfo)
       expect(snapshot.snapshot_id).to eq("snap_123")
+    end
+  end
+
+  describe "#get_mcp_token" do
+    subject(:sandbox) do
+      described_class.new(
+        sandbox_data: { "sandboxID" => "sbx_123" },
+        http_client: http_client,
+        api_key: "api-key"
+      )
+    end
+
+    it "memoizes the token read from the gateway file" do
+      allow(sandbox.files).to receive(:read)
+        .with("/etc/mcp-gateway/.token", user: "root")
+        .and_return("persisted-token")
+
+      expect(sandbox.get_mcp_token).to eq("persisted-token")
+      expect(sandbox.get_mcp_token).to eq("persisted-token")
+      expect(sandbox.files).to have_received(:read).once
     end
   end
 

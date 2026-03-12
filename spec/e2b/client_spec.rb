@@ -138,6 +138,48 @@ RSpec.describe E2B::Client do
 
       expect(sandbox.traffic_access_token).to eq("traffic-token")
     end
+
+    it "defaults to the MCP template and starts the gateway when mcp is enabled" do
+      allow(SecureRandom).to receive(:uuid).and_return("mcp-token")
+      expect_any_instance_of(E2B::Services::Commands).to receive(:run)
+        .with(
+          "mcp-gateway --config '{\"server\":{\"url\":\"https://example.test\"}}'",
+          user: "root",
+          envs: { "GATEWAY_ACCESS_TOKEN" => "mcp-token" }
+        )
+        .and_return(E2B::Services::CommandResult.new(exit_code: 0))
+
+      allow(http_client).to receive(:post)
+        .with(
+          "/sandboxes",
+          body: {
+            templateID: "mcp-gateway",
+            timeout: 300,
+            secure: true,
+            allow_internet_access: true,
+            autoPause: false,
+            mcp: {
+              server: {
+                url: "https://example.test"
+              }
+            }
+          },
+          timeout: 60
+        )
+        .and_return({ "sandboxID" => "sbx_123" })
+
+      client = described_class.new(api_key: "api-key")
+      sandbox = client.create(
+        template: nil,
+        mcp: {
+          server: {
+            url: "https://example.test"
+          }
+        }
+      )
+
+      expect(sandbox.get_mcp_url).to eq("https://50005-sbx_123.e2b.app/mcp")
+    end
   end
 
   describe "#connect" do
