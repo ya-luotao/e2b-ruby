@@ -40,18 +40,18 @@ module E2B
       end
 
       # Perform GET request to envd
-      def envd_get(path, params: {}, timeout: 120)
-        envd_client.get(path, params: params, timeout: timeout)
+      def envd_get(path, params: {}, timeout: 120, headers: nil)
+        envd_client.get(path, params: params, timeout: timeout, headers: headers)
       end
 
       # Perform POST request to envd
-      def envd_post(path, body: nil, timeout: 120)
-        envd_client.post(path, body: body, timeout: timeout)
+      def envd_post(path, body: nil, timeout: 120, headers: nil)
+        envd_client.post(path, body: body, timeout: timeout, headers: headers)
       end
 
       # Perform DELETE request to envd
-      def envd_delete(path, timeout: 120)
-        envd_client.delete(path, timeout: timeout)
+      def envd_delete(path, timeout: 120, headers: nil)
+        envd_client.delete(path, timeout: timeout, headers: headers)
       end
 
       # Perform Connect RPC call to envd
@@ -62,8 +62,15 @@ module E2B
       # @param timeout [Integer] Request timeout in seconds
       # @param on_event [Proc, nil] Callback for streaming events
       # @return [Hash] Response with :events, :stdout, :stderr, :exit_code
-      def envd_rpc(service, method, body: {}, timeout: 120, on_event: nil)
-        envd_client.rpc(service, method, body: body, timeout: timeout, on_event: on_event)
+      def envd_rpc(service, method, body: {}, timeout: 120, on_event: nil, headers: nil)
+        envd_client.rpc(service, method, body: body, timeout: timeout, on_event: on_event, headers: headers)
+      end
+
+      def user_auth_headers(user)
+        return {} if user.nil? || user.to_s.empty?
+
+        encoded = Base64.strict_encode64("#{user}:")
+        { "Authorization" => "Basic #{encoded}" }
       end
 
       private
@@ -98,28 +105,31 @@ module E2B
         @connection = build_connection
       end
 
-      def get(path, params: {}, timeout: DEFAULT_TIMEOUT)
+      def get(path, params: {}, timeout: DEFAULT_TIMEOUT, headers: nil)
         handle_response do
           @connection.get(normalize_path(path)) do |req|
             req.params = params
             req.options.timeout = timeout
+            req.headers.update(headers) if headers
           end
         end
       end
 
-      def post(path, body: nil, timeout: DEFAULT_TIMEOUT)
+      def post(path, body: nil, timeout: DEFAULT_TIMEOUT, headers: nil)
         handle_response do
           @connection.post(normalize_path(path)) do |req|
             req.body = body.to_json if body
             req.options.timeout = timeout
+            req.headers.update(headers) if headers
           end
         end
       end
 
-      def delete(path, timeout: DEFAULT_TIMEOUT)
+      def delete(path, timeout: DEFAULT_TIMEOUT, headers: nil)
         handle_response do
           @connection.delete(normalize_path(path)) do |req|
             req.options.timeout = timeout
+            req.headers.update(headers) if headers
           end
         end
       end
@@ -132,7 +142,7 @@ module E2B
       # @param timeout [Integer] Timeout in seconds
       # @param on_event [Proc, nil] Callback for streaming events
       # @return [Hash] Response
-      def rpc(service, method, body: {}, timeout: DEFAULT_TIMEOUT, on_event: nil)
+      def rpc(service, method, body: {}, timeout: DEFAULT_TIMEOUT, on_event: nil, headers: nil)
         path = "/#{service}/#{method}"
         json_body = body.to_json
         envelope = create_connect_envelope(json_body)
@@ -140,10 +150,10 @@ module E2B
         log_debug("RPC #{service}/#{method}")
 
         if on_event
-          return handle_streaming_rpc(path, envelope, timeout, on_event)
+          return handle_streaming_rpc(path, envelope, timeout, on_event, headers)
         end
 
-        handle_rpc_response(service, method) do
+        handle_rpc_response(service, method, headers: headers) do
           with_retry("RPC #{service}/#{method}") do
             url = URI.parse("#{@base_url.chomp('/')}#{path}")
             http = build_http(url, timeout)
@@ -152,6 +162,7 @@ module E2B
             request["Content-Type"] = "application/connect+json"
             request["X-Access-Token"] = @access_token if @access_token
             request["Connection"] = "keep-alive"
+            apply_custom_headers(request, headers)
             request.body = envelope
 
             response = http.request(request)
@@ -167,7 +178,7 @@ module E2B
       end
 
       # Streaming RPC with chunked response processing
-      def handle_streaming_rpc(path, envelope, timeout, on_event)
+      def handle_streaming_rpc(path, envelope, timeout, on_event, headers)
         result = { events: [], stdout: "", stderr: "", exit_code: nil }
         buffer = "".b
 
@@ -180,6 +191,7 @@ module E2B
           request["Content-Type"] = "application/connect+json"
           request["X-Access-Token"] = @access_token if @access_token
           request["Connection"] = "keep-alive"
+          apply_custom_headers(request, headers)
           request.body = envelope
 
           http.start do |conn|
@@ -342,7 +354,7 @@ module E2B
         raise E2B::E2BError, "Connection to sandbox failed: #{e.message}"
       end
 
-      def handle_rpc_response(service, method)
+      def handle_rpc_response(service, method, headers: nil)
         response = yield
 
         handle_error(response) unless response.success?
@@ -479,6 +491,14 @@ module E2B
 
       def log_debug(message)
         @logger&.debug("[E2B] #{message}")
+      end
+
+      def apply_custom_headers(request, headers)
+        return unless headers
+
+        headers.each do |key, value|
+          request[key] = value
+        end
       end
     end
   end

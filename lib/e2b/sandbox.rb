@@ -2,6 +2,8 @@
 
 require "time"
 require "securerandom"
+require "base64"
+require "digest"
 
 module E2B
   # Represents an E2B Sandbox instance
@@ -313,12 +315,15 @@ module E2B
     # @param path [String] File path in the sandbox
     # @param user [String, nil] Username context
     # @return [String] Download URL
-    def download_url(path, user: nil)
-      encoded_path = URI.encode_www_form_component(path)
+    def download_url(path, user: nil, use_signature_expiration: nil)
+      query = build_file_url_query(
+        path: path,
+        user: user,
+        operation: "read",
+        use_signature_expiration: use_signature_expiration
+      )
       base = "https://#{Services::BaseService::ENVD_PORT}-#{@sandbox_id}.#{@domain}/files"
-      url = "#{base}?path=#{encoded_path}"
-      url += "&username=#{URI.encode_www_form_component(user)}" if user
-      url
+      query.empty? ? base : "#{base}?#{URI.encode_www_form(query)}"
     end
 
     # Get URL for uploading a file
@@ -326,12 +331,15 @@ module E2B
     # @param path [String, nil] Destination path
     # @param user [String, nil] Username context
     # @return [String] Upload URL
-    def upload_url(path = nil, user: nil)
+    def upload_url(path = nil, user: nil, use_signature_expiration: nil)
       base = "https://#{Services::BaseService::ENVD_PORT}-#{@sandbox_id}.#{@domain}/files"
-      params = []
-      params << "path=#{URI.encode_www_form_component(path)}" if path
-      params << "username=#{URI.encode_www_form_component(user)}" if user
-      params.empty? ? base : "#{base}?#{params.join("&")}"
+      query = build_file_url_query(
+        path: path,
+        user: user,
+        operation: "write",
+        use_signature_expiration: use_signature_expiration
+      )
+      query.empty? ? base : "#{base}?#{URI.encode_www_form(query)}"
     end
 
     # Get sandbox metrics (CPU, memory, disk usage)
@@ -417,6 +425,46 @@ module E2B
       Time.parse(value)
     rescue ArgumentError
       nil
+    end
+
+    def build_file_url_query(path:, user:, operation:, use_signature_expiration:)
+      if use_signature_expiration && !@envd_access_token
+        raise ArgumentError, "Signature expiration can be used only when the sandbox is secured"
+      end
+
+      query = []
+      query << ["path", path] if path
+      query << ["username", user] if user
+
+      signature = file_signature(
+        path: path || "",
+        operation: operation,
+        user: user,
+        expiration_in_seconds: use_signature_expiration
+      )
+
+      return query unless signature
+
+      query << ["signature", signature[:signature]]
+      query << ["signature_expiration", signature[:expiration].to_s] if signature[:expiration]
+      query
+    end
+
+    def file_signature(path:, operation:, user:, expiration_in_seconds:)
+      return nil unless @envd_access_token
+
+      expiration = expiration_in_seconds ? Time.now.to_i + expiration_in_seconds : nil
+      raw_user = user || ""
+      raw = if expiration
+              "#{path}:#{operation}:#{raw_user}:#{@envd_access_token}:#{expiration}"
+            else
+              "#{path}:#{operation}:#{raw_user}:#{@envd_access_token}"
+            end
+
+      digest = Digest::SHA256.digest(raw)
+      encoded = Base64.strict_encode64(digest).sub(/=+\z/, "")
+
+      { signature: "v1_#{encoded}", expiration: expiration }
     end
   end
 end

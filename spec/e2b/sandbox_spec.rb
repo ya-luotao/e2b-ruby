@@ -227,5 +227,44 @@ RSpec.describe E2B::Sandbox do
       expect(sandbox.download_url("/tmp/my file.txt", user: "dev user"))
         .to eq("https://49983-sbx_123.custom.e2b.test/files?path=%2Ftmp%2Fmy+file.txt&username=dev+user")
     end
+
+    it "signs file URLs for secured sandboxes" do
+      secure_sandbox = described_class.new(
+        sandbox_data: {
+          "sandboxID" => "sbx_123",
+          "envdAccessToken" => "envd-token"
+        },
+        http_client: http_client,
+        api_key: "api-key",
+        domain: "custom.e2b.test"
+      )
+
+      allow(Time).to receive(:now).and_return(Time.at(1_700_000_000))
+
+      expect(secure_sandbox.download_url("/tmp/my file.txt", user: "dev user", use_signature_expiration: 60))
+        .to eq("https://49983-sbx_123.custom.e2b.test/files?path=%2Ftmp%2Fmy+file.txt&username=dev+user&signature=v1_mhCcPjgi%2BL9J%2F0NjgKNfvmhRNfUNJIReQ9F4SnmGj3Q&signature_expiration=1700000060")
+    end
+
+    it "signs upload URLs for secured sandboxes" do
+      secure_sandbox = described_class.new(
+        sandbox_data: {
+          "sandboxID" => "sbx_123",
+          "envdAccessToken" => "envd-token"
+        },
+        http_client: http_client,
+        api_key: "api-key",
+        domain: "custom.e2b.test"
+      )
+
+      allow(Time).to receive(:now).and_return(Time.at(1_700_000_000))
+
+      expect(secure_sandbox.upload_url("/tmp/my file.txt", user: "dev user", use_signature_expiration: 60))
+        .to eq("https://49983-sbx_123.custom.e2b.test/files?path=%2Ftmp%2Fmy+file.txt&username=dev+user&signature=v1_a%2FxNf3cifN6uo%2FKzZth1RPnUHdo%2BkpEzkenZ%2BzC8Uzo&signature_expiration=1700000060")
+    end
+
+    it "rejects signature expiration for unsecured sandboxes" do
+      expect { sandbox.download_url("/tmp/my file.txt", use_signature_expiration: 60) }
+        .to raise_error(ArgumentError, "Signature expiration can be used only when the sandbox is secured")
+    end
   end
 end
