@@ -162,27 +162,81 @@ RSpec.describe E2B::Sandbox do
       allow(E2B::API::HttpClient).to receive(:new).and_return(http_client)
     end
 
-    it "serializes metadata filters and returns sandbox payloads" do
+    it "returns a paginator that encodes metadata filters and state arrays" do
       allow(http_client).to receive(:get)
         .with(
           "/v2/sandboxes",
           params: {
             limit: 5,
             nextToken: "page-2",
-            metadata: '{"team":"sdk"}',
-            state: "running"
-          }
+            metadata: "team=sdk",
+            state: %w[running paused]
+          },
+          detailed: true
         )
-        .and_return({ "sandboxes" => [{ "sandboxID" => "sbx_123" }] })
+        .and_return(
+          E2B::API::HttpClient::DetailedResponse.new(
+            body: [{ "sandboxID" => "sbx_123", "state" => "running" }],
+            headers: { "x-next-token" => "page-3" }
+          )
+        )
 
-      sandboxes = described_class.list(
-        query: { metadata: { team: "sdk" }, state: "running" },
+      paginator = described_class.list(
+        query: { metadata: { team: "sdk" }, state: %w[running paused] },
         limit: 5,
         next_token: "page-2",
         api_key: "api-key"
       )
 
-      expect(sandboxes).to eq([{ "sandboxID" => "sbx_123" }])
+      sandboxes = paginator.next_items
+
+      expect(sandboxes.map(&:sandbox_id)).to eq(["sbx_123"])
+      expect(sandboxes.first.state).to eq("running")
+      expect(paginator.next_token).to eq("page-3")
+      expect(paginator).to be_has_next
+    end
+  end
+
+  describe ".list_snapshots" do
+    before do
+      allow(E2B::API::HttpClient).to receive(:new).and_return(http_client)
+    end
+
+    it "returns a paginator for snapshots filtered by sandbox" do
+      allow(http_client).to receive(:get)
+        .with(
+          "/snapshots",
+          params: {
+            sandboxID: "sbx_123",
+            limit: 2,
+            nextToken: "snap-page-2"
+          },
+          detailed: true
+        )
+        .and_return(
+          E2B::API::HttpClient::DetailedResponse.new(
+            body: [{ "snapshotID" => "snap_123" }],
+            headers: { "x-next-token" => "snap-page-3" }
+          )
+        )
+
+      paginator = described_class.list_snapshots(
+        sandbox_id: "sbx_123",
+        limit: 2,
+        next_token: "snap-page-2",
+        api_key: "api-key"
+      )
+
+      snapshots = paginator.next_items
+
+      expect(snapshots.map(&:snapshot_id)).to eq(["snap_123"])
+      expect(paginator.next_token).to eq("snap-page-3")
+    end
+
+    it "returns false when deleting a missing snapshot" do
+      allow(http_client).to receive(:delete).with("/templates/snap_missing").and_raise(E2B::NotFoundError, "missing")
+
+      expect(described_class.delete_snapshot("snap_missing", api_key: "api-key")).to be(false)
     end
   end
 
@@ -272,6 +326,27 @@ RSpec.describe E2B::Sandbox do
         .and_return({ "logs" => [{ "message" => "booted" }] })
 
       expect(sandbox.logs(start_time: start_time, limit: 2)).to eq([{ "message" => "booted" }])
+    end
+  end
+
+  describe "#create_snapshot" do
+    subject(:sandbox) do
+      described_class.new(
+        sandbox_data: { "sandboxID" => "sbx_123" },
+        http_client: http_client,
+        api_key: "api-key"
+      )
+    end
+
+    it "returns snapshot info objects" do
+      allow(http_client).to receive(:post)
+        .with("/sandboxes/sbx_123/snapshots")
+        .and_return({ "snapshotID" => "snap_123" })
+
+      snapshot = sandbox.create_snapshot
+
+      expect(snapshot).to be_a(E2B::Models::SnapshotInfo)
+      expect(snapshot.snapshot_id).to eq("snap_123")
     end
   end
 

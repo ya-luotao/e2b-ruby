@@ -31,6 +31,15 @@ module E2B
       # @return [Hash] Metadata
       attr_reader :metadata
 
+      # @return [String, nil] Current sandbox state
+      attr_reader :state
+
+      # @return [String, nil] Domain where the sandbox is hosted
+      attr_reader :sandbox_domain
+
+      # @return [String, nil] Envd version reported by the control plane
+      attr_reader :envd_version
+
       # Create from API response hash
       #
       # @param data [Hash] API response data
@@ -45,12 +54,16 @@ module E2B
           end_at: parse_time(data["endAt"] || data["end_at"] || data[:endAt]),
           cpu_count: data["cpuCount"] || data["cpu_count"] || data[:cpuCount],
           memory_mb: data["memoryMB"] || data["memory_mb"] || data[:memoryMB],
-          metadata: data["metadata"] || data[:metadata] || {}
+          metadata: data["metadata"] || data[:metadata] || {},
+          state: data["state"] || data[:state],
+          sandbox_domain: data["domain"] || data[:domain],
+          envd_version: data["envdVersion"] || data["envd_version"] || data[:envdVersion]
         )
       end
 
       def initialize(sandbox_id:, template_id:, alias_name: nil, client_id: nil,
-                     started_at: nil, end_at: nil, cpu_count: nil, memory_mb: nil, metadata: {})
+                     started_at: nil, end_at: nil, cpu_count: nil, memory_mb: nil, metadata: {},
+                     state: nil, sandbox_domain: nil, envd_version: nil)
         @sandbox_id = sandbox_id
         @template_id = template_id
         @alias_name = alias_name
@@ -60,12 +73,16 @@ module E2B
         @cpu_count = cpu_count
         @memory_mb = memory_mb
         @metadata = metadata || {}
+        @state = state
+        @sandbox_domain = sandbox_domain
+        @envd_version = envd_version
       end
 
       # Check if sandbox is still running (not past end_at)
       #
       # @return [Boolean]
       def running?
+        return false if @state == "paused"
         return true if @end_at.nil?
 
         Time.now < @end_at

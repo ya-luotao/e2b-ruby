@@ -170,23 +170,43 @@ module E2B
         credentials = resolve_credentials(api_key: api_key, access_token: access_token)
         http_client = build_http_client(**credentials, domain: resolve_domain(domain))
 
-        params = { limit: limit }
-        params[:nextToken] = next_token if next_token
-        if query
-          params[:metadata] = query[:metadata].to_json if query[:metadata]
-          params[:state] = query[:state] if query[:state]
-        end
+        SandboxPaginator.new(
+          http_client: http_client,
+          query: query,
+          limit: limit,
+          next_token: next_token
+        )
+      end
 
-        response = http_client.get("/v2/sandboxes", params: params)
+      # List snapshots for the team, optionally filtered by source sandbox.
+      #
+      # @param sandbox_id [String, nil] Filter snapshots by source sandbox ID
+      # @param limit [Integer] Maximum results per page
+      # @param next_token [String, nil] Pagination token
+      # @return [SnapshotPaginator]
+      def list_snapshots(sandbox_id: nil, limit: 100, next_token: nil, api_key: nil, access_token: nil, domain: nil)
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
+        http_client = build_http_client(**credentials, domain: resolve_domain(domain))
 
-        sandboxes = if response.is_a?(Array)
-                      response
-                    elsif response.is_a?(Hash)
-                      response["sandboxes"] || response[:sandboxes] || []
-                    else
-                      []
-                    end
-        Array(sandboxes)
+        SnapshotPaginator.new(
+          http_client: http_client,
+          sandbox_id: sandbox_id,
+          limit: limit,
+          next_token: next_token
+        )
+      end
+
+      # Delete a snapshot template.
+      #
+      # @param snapshot_id [String] Snapshot identifier
+      # @return [Boolean] true if deleted, false if not found
+      def delete_snapshot(snapshot_id, api_key: nil, access_token: nil, domain: nil)
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
+        http_client = build_http_client(**credentials, domain: resolve_domain(domain))
+        http_client.delete("/templates/#{snapshot_id}")
+        true
+      rescue E2B::NotFoundError
+        false
       end
 
       # Kill a sandbox by ID
@@ -334,7 +354,23 @@ module E2B
     #
     # @return [Hash] Snapshot info with snapshot_id
     def create_snapshot
-      @http_client.post("/sandboxes/#{@sandbox_id}/snapshots")
+      response = @http_client.post("/sandboxes/#{@sandbox_id}/snapshots")
+      Models::SnapshotInfo.from_hash(response)
+    end
+
+    # List snapshots that were created from this sandbox.
+    #
+    # @param limit [Integer] Maximum results per page
+    # @param next_token [String, nil] Pagination token
+    # @return [SnapshotPaginator]
+    def list_snapshots(limit: 100, next_token: nil)
+      self.class.list_snapshots(
+        sandbox_id: @sandbox_id,
+        limit: limit,
+        next_token: next_token,
+        api_key: @api_key,
+        domain: @domain
+      )
     end
 
     # Get the host string for a port (without protocol)

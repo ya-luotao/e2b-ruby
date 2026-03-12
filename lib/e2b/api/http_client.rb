@@ -10,6 +10,8 @@ module E2B
     #
     # Handles authentication, request/response processing, and error handling.
     class HttpClient
+      DetailedResponse = Struct.new(:body, :headers, keyword_init: true)
+
       # Default request timeout in seconds
       DEFAULT_TIMEOUT = 120
 
@@ -36,8 +38,8 @@ module E2B
       # @param params [Hash] Query parameters
       # @param timeout [Integer] Request timeout in seconds
       # @return [Hash, Array, String] Parsed response body
-      def get(path, params: {}, timeout: DEFAULT_TIMEOUT)
-        handle_response do
+      def get(path, params: {}, timeout: DEFAULT_TIMEOUT, detailed: false)
+        handle_response(detailed: detailed) do
           @connection.get(normalize_path(path)) do |req|
             req.params = params
             req.options.timeout = timeout
@@ -51,8 +53,8 @@ module E2B
       # @param body [Hash, nil] Request body
       # @param timeout [Integer] Request timeout in seconds
       # @return [Hash, Array, String] Parsed response body
-      def post(path, body: nil, timeout: DEFAULT_TIMEOUT)
-        handle_response do
+      def post(path, body: nil, timeout: DEFAULT_TIMEOUT, detailed: false)
+        handle_response(detailed: detailed) do
           @connection.post(normalize_path(path)) do |req|
             req.body = body.to_json if body
             req.options.timeout = timeout
@@ -66,8 +68,8 @@ module E2B
       # @param body [Hash, nil] Request body
       # @param timeout [Integer] Request timeout in seconds
       # @return [Hash, Array, String] Parsed response body
-      def put(path, body: nil, timeout: DEFAULT_TIMEOUT)
-        handle_response do
+      def put(path, body: nil, timeout: DEFAULT_TIMEOUT, detailed: false)
+        handle_response(detailed: detailed) do
           @connection.put(normalize_path(path)) do |req|
             req.body = body.to_json if body
             req.options.timeout = timeout
@@ -80,8 +82,8 @@ module E2B
       # @param path [String] API endpoint path
       # @param timeout [Integer] Request timeout in seconds
       # @return [Hash, Array, String, nil] Parsed response body
-      def delete(path, timeout: DEFAULT_TIMEOUT)
-        handle_response do
+      def delete(path, timeout: DEFAULT_TIMEOUT, detailed: false)
+        handle_response(detailed: detailed) do
           @connection.delete(normalize_path(path)) do |req|
             req.options.timeout = timeout
           end
@@ -110,15 +112,23 @@ module E2B
         end
       end
 
-      def handle_response
+      def handle_response(detailed: false)
         response = yield
         handle_error(response) unless response.success?
 
-        body = response.body
+        parsed_body = parse_body(response.body, response.headers)
+        return DetailedResponse.new(body: parsed_body, headers: response.headers.to_h) if detailed
 
-        # If body is a string but should be JSON, try to parse it
+        parsed_body
+      rescue Faraday::TimeoutError => e
+        raise E2B::TimeoutError, "Request timed out: #{e.message}"
+      rescue Faraday::ConnectionFailed => e
+        raise E2B::E2BError, "Connection failed: #{e.message}"
+      end
+
+      def parse_body(body, headers)
         if body.is_a?(String) && !body.empty?
-          content_type = response.headers["content-type"] rescue "unknown"
+          content_type = headers["content-type"] rescue "unknown"
           if content_type&.include?("json") || body.start_with?("{", "[")
             begin
               return JSON.parse(body)
@@ -129,10 +139,6 @@ module E2B
         end
 
         body
-      rescue Faraday::TimeoutError => e
-        raise E2B::TimeoutError, "Request timed out: #{e.message}"
-      rescue Faraday::ConnectionFailed => e
-        raise E2B::E2BError, "Connection failed: #{e.message}"
       end
 
       def handle_error(response)

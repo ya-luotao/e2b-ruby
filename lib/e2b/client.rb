@@ -121,29 +121,18 @@ module E2B
     # @param metadata [Hash, nil] Filter by metadata
     # @param state [String, nil] Filter by state
     # @param limit [Integer] Maximum results
-    # @return [Array<Sandbox>]
-    def list(metadata: nil, state: nil, limit: 100)
-      params = { limit: limit }
-      params[:metadata] = metadata.to_json if metadata
-      params[:state] = state if state
+    # @return [SandboxPaginator]
+    def list(metadata: nil, state: nil, limit: 100, next_token: nil)
+      query = {}
+      query[:metadata] = metadata if metadata
+      query[:state] = state if state
 
-      response = @http_client.get("/v2/sandboxes", params: params)
-
-      sandboxes = if response.is_a?(Array)
-                    response
-                  elsif response.is_a?(Hash)
-                    response["sandboxes"] || response[:sandboxes] || []
-                  else
-                    []
-                  end
-      Array(sandboxes).map do |sandbox_data|
-        Sandbox.new(
-          sandbox_data: sandbox_data,
-          http_client: @http_client,
-          api_key: @config.api_key,
-          domain: @domain
-        )
-      end
+      SandboxPaginator.new(
+        http_client: @http_client,
+        query: query.empty? ? nil : query,
+        limit: limit,
+        next_token: next_token
+      )
     end
 
     # Kill a sandbox
@@ -190,6 +179,32 @@ module E2B
         api_key: @config.api_key,
         domain: @domain
       )
+    end
+
+    # List snapshots for the team, optionally filtered by source sandbox.
+    #
+    # @param sandbox_id [String, nil] Filter snapshots by source sandbox ID
+    # @param limit [Integer] Maximum results per page
+    # @param next_token [String, nil] Pagination token
+    # @return [SnapshotPaginator]
+    def list_snapshots(sandbox_id: nil, limit: 100, next_token: nil)
+      SnapshotPaginator.new(
+        http_client: @http_client,
+        sandbox_id: sandbox_id,
+        limit: limit,
+        next_token: next_token
+      )
+    end
+
+    # Delete a snapshot template.
+    #
+    # @param snapshot_id [String] Snapshot identifier
+    # @return [Boolean]
+    def delete_snapshot(snapshot_id)
+      @http_client.delete("/templates/#{snapshot_id}")
+      true
+    rescue NotFoundError
+      false
     end
 
     private

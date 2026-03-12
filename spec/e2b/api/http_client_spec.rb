@@ -46,6 +46,23 @@ RSpec.describe E2B::API::HttpClient do
       expect(a_request(:get, "#{base_url}/sandboxes")
         .with(headers: { "Authorization" => "Bearer access-token" })).to have_been_made
     end
+
+    it "can return parsed bodies with response headers" do
+      stub_request(:get, "#{base_url}/sandboxes")
+        .to_return(
+          status: 200,
+          body: '[{"sandboxID":"sbx_123"}]',
+          headers: {
+            "Content-Type" => "application/json",
+            "X-Next-Token" => "page-2"
+          }
+        )
+
+      response = client.get("/sandboxes", detailed: true)
+
+      expect(response.body).to eq([{ "sandboxID" => "sbx_123" }])
+      expect(response.headers["x-next-token"]).to eq("page-2")
+    end
   end
 
   describe "error mapping" do

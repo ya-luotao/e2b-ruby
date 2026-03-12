@@ -10,9 +10,11 @@ require_relative "e2b/configuration"
 
 # API layer
 require_relative "e2b/api/http_client"
+require_relative "e2b/paginator"
 
 # Models
 require_relative "e2b/models/sandbox_info"
+require_relative "e2b/models/snapshot_info"
 require_relative "e2b/models/process_result"
 require_relative "e2b/models/entry_info"
 
