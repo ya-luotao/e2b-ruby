@@ -7,6 +7,7 @@
 require_relative "e2b/version"
 require_relative "e2b/errors"
 require_relative "e2b/configuration"
+require_relative "e2b/sandbox_helpers"
 require_relative "e2b/ready_cmd"
 require_relative "e2b/dockerfile_parser"
 require_relative "e2b/template_logger"
@@ -29,6 +30,7 @@ require_relative "e2b/models/entry_info"
 
 # Services
 require_relative "e2b/services/base_service"
+require_relative "e2b/services/live_streamable"
 require_relative "e2b/services/command_handle"
 require_relative "e2b/services/commands"
 require_relative "e2b/services/filesystem"

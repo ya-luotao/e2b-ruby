@@ -113,7 +113,7 @@ RSpec.describe E2B::Sandbox do
       allow(SecureRandom).to receive(:uuid).and_return("mcp-token")
       expect_any_instance_of(E2B::Services::Commands).to receive(:run)
         .with(
-          "mcp-gateway --config '{\"server\":{\"url\":\"https://example.test\"}}'",
+          "mcp-gateway --config \\{\\\"server\\\":\\{\\\"url\\\":\\\"https://example.test\\\"\\}\\}",
           user: "root",
           envs: { "GATEWAY_ACCESS_TOKEN" => "mcp-token" }
         )

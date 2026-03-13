@@ -16,6 +16,8 @@ module E2B
   # @example Using Sandbox directly (recommended, matches official SDK)
   #   sandbox = E2B::Sandbox.create(template: "base", api_key: "your-key")
   class Client
+    include SandboxHelpers
+
     # @return [Configuration] Client configuration
     attr_reader :config
 
@@ -77,7 +79,7 @@ module E2B
       end
 
       response = @http_client.post("/sandboxes", body: body, timeout: request_timeout || @config.request_timeout || 120)
-      ensure_supported_envd_version!(response)
+      ensure_supported_envd_version!(response, @http_client)
 
       sandbox = Sandbox.new(
         sandbox_data: response,
@@ -225,65 +227,6 @@ module E2B
     end
 
     private
-
-    def resolved_template(template, mcp:)
-      return template unless template.nil? || template.empty?
-
-      return Sandbox::DEFAULT_MCP_TEMPLATE if mcp
-
-      @config.default_template || "base"
-    end
-
-    def normalized_lifecycle(lifecycle:, auto_pause:)
-      raw_lifecycle = lifecycle || {
-        on_timeout: auto_pause ? "pause" : "kill",
-        auto_resume: false
-      }
-
-      on_timeout = raw_lifecycle[:on_timeout] || raw_lifecycle["on_timeout"] || "kill"
-      unless %w[kill pause].include?(on_timeout)
-        raise ArgumentError, "Lifecycle on_timeout must be 'kill' or 'pause'"
-      end
-
-      auto_resume = if raw_lifecycle.key?(:auto_resume)
-                      raw_lifecycle[:auto_resume]
-                    else
-                      raw_lifecycle["auto_resume"]
-                    end
-
-      {
-        on_timeout: on_timeout,
-        auto_resume: on_timeout == "pause" ? !!auto_resume : false
-      }
-    end
-
-    def start_mcp_gateway(sandbox, mcp)
-      token = SecureRandom.uuid
-      sandbox.instance_variable_set(:@mcp_token, token)
-      sandbox.commands.run(
-        "mcp-gateway --config '#{JSON.generate(mcp)}'",
-        user: "root",
-        envs: { "GATEWAY_ACCESS_TOKEN" => token }
-      )
-    end
-
-    def ensure_supported_envd_version!(response)
-      envd_version = response["envdVersion"] || response["envd_version"] || response[:envdVersion]
-      return if envd_version.nil?
-      return unless Gem::Version.new(envd_version) < Gem::Version.new("0.1.0")
-
-      sandbox_id = response["sandboxID"] || response["sandbox_id"] || response[:sandboxID]
-      begin
-        @http_client.delete("/sandboxes/#{sandbox_id}") if sandbox_id
-      rescue NotFoundError
-        nil
-      end
-
-      raise TemplateError,
-        "You need to update the template to use the new SDK. You can do this by running `e2b template build` in the directory with the template."
-    rescue ArgumentError
-      nil
-    end
 
     def resolve_config(config_or_options)
       case config_or_options

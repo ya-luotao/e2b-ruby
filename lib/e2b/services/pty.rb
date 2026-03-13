@@ -53,6 +53,7 @@ module E2B
     # @example Connect to an existing PTY
     #   handle = pty.connect(pid)
     class Pty < BaseService
+      include LiveStreamable
       # Default shell to use for PTY sessions
       DEFAULT_SHELL = "/bin/bash"
 
@@ -220,64 +221,6 @@ module E2B
 
       private
 
-      def build_live_handle(rpc_method:, body:, timeout:, headers: nil)
-        stream = LiveEventStream.new
-        start_queue = Queue.new
-        start_signal_sent = false
-        pid = nil
-
-        stream_thread = Thread.new do
-          Thread.current.report_on_exception = false if Thread.current.respond_to?(:report_on_exception=)
-
-          begin
-            envd_rpc(
-              "process.Process", rpc_method,
-              body: body,
-              timeout: timeout,
-              headers: headers,
-              on_event: lambda { |event_data|
-                stream_event = event_data[:event]
-                stream.push(stream_event) if stream_event
-
-                next if start_signal_sent
-
-                extracted_pid = extract_pid_from_event(stream_event)
-                next unless extracted_pid
-
-                pid = extracted_pid
-                start_signal_sent = true
-                start_queue << [:pid, pid]
-              }
-            )
-
-            next if start_signal_sent
-
-            start_signal_sent = true
-            start_queue << [:error, E2BError.new("Failed to start PTY: expected start event")]
-          rescue StandardError => e
-            unless start_signal_sent
-              start_signal_sent = true
-              start_queue << [:error, e]
-            end
-
-            stream.fail(e)
-          ensure
-            stream.close
-          end
-        end
-
-        start_state, start_value = start_queue.pop
-        raise start_value if start_state == :error
-
-        CommandHandle.new(
-          pid: pid,
-          handle_kill: -> { kill(pid, headers: headers) },
-          handle_send_stdin: ->(data) { send_stdin(pid, data, headers: headers) },
-          handle_disconnect: -> { disconnect_live_stream(stream_thread, stream) },
-          events_proc: ->(&events_block) { stream.each(&events_block) }
-        )
-      end
-
       # Build environment variables hash with PTY defaults.
       #
       # Ensures TERM, LANG, and LC_ALL are set to sensible defaults
@@ -298,23 +241,6 @@ module E2B
         result
       end
 
-      # Extract PID from a live stream event payload.
-      #
-      # @param event [Hash] Raw stream event hash
-      # @return [Integer, nil] Process ID, or nil if not found
-      def extract_pid_from_event(event)
-        return nil unless event.is_a?(Hash) && event["event"].is_a?(Hash)
-
-        start_event = event["event"]["Start"] || event["event"]["start"]
-        return nil unless start_event && start_event["pid"]
-
-        start_event["pid"].to_i
-      end
-
-      def disconnect_live_stream(stream_thread, stream)
-        stream.close(discard_pending: true)
-        stream_thread.kill if stream_thread&.alive?
-      end
     end
   end
 end

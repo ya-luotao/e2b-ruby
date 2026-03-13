@@ -182,7 +182,7 @@ module E2B
           return handle_streaming_rpc(path, envelope, timeout, on_event, headers)
         end
 
-        handle_rpc_response(service, method, headers: headers) do
+        handle_rpc_response(service, method) do
           with_retry("RPC #{service}/#{method}") do
             url = URI.parse("#{@base_url.chomp('/')}#{path}")
             http = build_http(url, timeout)
@@ -383,7 +383,7 @@ module E2B
         raise E2B::E2BError, "Connection to sandbox failed: #{e.message}"
       end
 
-      def handle_rpc_response(service, method, headers: nil)
+      def handle_rpc_response(service, method)
         response = yield
 
         handle_error(response) unless response.success?
