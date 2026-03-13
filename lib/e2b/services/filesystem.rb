@@ -5,6 +5,7 @@ require "net/http"
 require "openssl"
 require "uri"
 require "json"
+require "stringio"
 
 module E2B
   module Services
@@ -24,8 +25,6 @@ module E2B
     #   entries = sandbox.files.list("/home/user")
     class Filesystem < BaseService
       # Default username for file operations
-      DEFAULT_USER = "user"
-
       # Read file content
       #
       # @param path [String] File path in the sandbox
@@ -36,10 +35,20 @@ module E2B
       #
       # @example
       #   content = sandbox.files.read("/home/user/config.json")
-      def read(path, format: "text", user: DEFAULT_USER, request_timeout: 120)
+      def read(path, format: "text", user: nil, request_timeout: 120)
         url = build_file_url("/files", path: path, user: user)
         response = rest_get(url, timeout: request_timeout)
-        response
+
+        case format
+        when "text"
+          response.dup.force_encoding("UTF-8")
+        when "bytes"
+          response.b
+        when "stream"
+          StringIO.new(response.b)
+        else
+          raise ArgumentError, "Unsupported read format '#{format}'"
+        end
       end
 
       # Write content to a file using REST upload
@@ -48,14 +57,15 @@ module E2B
       # @param data [String, IO] Content to write (string or IO object)
       # @param user [String] Username context for the operation
       # @param request_timeout [Integer] Request timeout in seconds
-      # @return [Models::EntryInfo, nil] Info about the written file
+      # @return [Models::WriteInfo] Info about the written file
       #
       # @example
       #   sandbox.files.write("/home/user/output.txt", "Hello, World!")
-      def write(path, data, user: DEFAULT_USER, request_timeout: 120)
+      def write(path, data, user: nil, request_timeout: 120)
         url = build_file_url("/files", path: path, user: user)
         content = data.is_a?(IO) || data.respond_to?(:read) ? data.read : data.to_s
-        rest_upload(url, content, timeout: request_timeout)
+        result = rest_upload(url, content, timeout: request_timeout)
+        build_write_info(result, default_path: path)
       end
 
       # Write multiple files at once
@@ -70,7 +80,7 @@ module E2B
       #     { path: "/home/user/a.txt", data: "Content A" },
       #     { path: "/home/user/b.txt", data: "Content B" }
       #   ])
-      def write_files(files, user: DEFAULT_USER, request_timeout: 120)
+      def write_files(files, user: nil, request_timeout: 120)
         files.map do |file|
           write(file[:path], file[:data] || file[:content], user: user, request_timeout: request_timeout)
         end
@@ -87,10 +97,11 @@ module E2B
       # @example
       #   entries = sandbox.files.list("/home/user")
       #   entries.each { |e| puts "#{e.name} (#{e.type})" }
-      def list(path, depth: 1, user: DEFAULT_USER, request_timeout: 60)
+      def list(path, depth: 1, user: nil, request_timeout: 60)
         response = envd_rpc("filesystem.Filesystem", "ListDir",
           body: { path: path, depth: depth },
-          timeout: request_timeout)
+          timeout: request_timeout,
+          headers: user_auth_headers(user))
 
         entries = extract_entries(response)
         entries.map { |e| Models::EntryInfo.from_hash(e) }
@@ -102,7 +113,7 @@ module E2B
       # @param user [String] Username context
       # @param request_timeout [Integer] Request timeout in seconds
       # @return [Boolean]
-      def exists?(path, user: DEFAULT_USER, request_timeout: 30)
+      def exists?(path, user: nil, request_timeout: 30)
         get_info(path, user: user, request_timeout: request_timeout)
         true
       rescue E2B::NotFoundError, E2B::E2BError
@@ -115,10 +126,11 @@ module E2B
       # @param user [String] Username context
       # @param request_timeout [Integer] Request timeout in seconds
       # @return [Models::EntryInfo] File/directory info
-      def get_info(path, user: DEFAULT_USER, request_timeout: 30)
+      def get_info(path, user: nil, request_timeout: 30)
         response = envd_rpc("filesystem.Filesystem", "Stat",
           body: { path: path },
-          timeout: request_timeout)
+          timeout: request_timeout,
+          headers: user_auth_headers(user))
 
         entry_data = extract_entry(response)
         Models::EntryInfo.from_hash(entry_data)
@@ -129,10 +141,11 @@ module E2B
       # @param path [String] Path to remove
       # @param user [String] Username context
       # @param request_timeout [Integer] Request timeout in seconds
-      def remove(path, user: DEFAULT_USER, request_timeout: 30)
+      def remove(path, user: nil, request_timeout: 30)
         envd_rpc("filesystem.Filesystem", "Remove",
           body: { path: path },
-          timeout: request_timeout)
+          timeout: request_timeout,
+          headers: user_auth_headers(user))
       end
 
       # Rename/move a file or directory
@@ -142,10 +155,11 @@ module E2B
       # @param user [String] Username context
       # @param request_timeout [Integer] Request timeout in seconds
       # @return [Models::EntryInfo] Info about the moved entry
-      def rename(old_path, new_path, user: DEFAULT_USER, request_timeout: 30)
+      def rename(old_path, new_path, user: nil, request_timeout: 30)
         response = envd_rpc("filesystem.Filesystem", "Move",
           body: { source: old_path, destination: new_path },
-          timeout: request_timeout)
+          timeout: request_timeout,
+          headers: user_auth_headers(user))
 
         entry_data = extract_entry(response)
         Models::EntryInfo.from_hash(entry_data)
@@ -157,10 +171,11 @@ module E2B
       # @param user [String] Username context
       # @param request_timeout [Integer] Request timeout in seconds
       # @return [Boolean] true if created successfully
-      def make_dir(path, user: DEFAULT_USER, request_timeout: 30)
+      def make_dir(path, user: nil, request_timeout: 30)
         envd_rpc("filesystem.Filesystem", "MakeDir",
           body: { path: path },
-          timeout: request_timeout)
+          timeout: request_timeout,
+          headers: user_auth_headers(user))
         true
       end
 
@@ -180,10 +195,16 @@ module E2B
       #   events = handle.get_new_events
       #   events.each { |e| puts "#{e.type}: #{e.name}" }
       #   handle.stop
-      def watch_dir(path, recursive: false, user: DEFAULT_USER, request_timeout: 30)
+      def watch_dir(path, recursive: false, user: nil, request_timeout: 30)
+        if recursive && !supports_recursive_watch?
+          raise E2B::TemplateError,
+            "You need to update the template to use recursive watching. You can do this by running `e2b template build` in the directory with the template."
+        end
+
         response = envd_rpc("filesystem.Filesystem", "CreateWatcher",
           body: { path: path, recursive: recursive },
-          timeout: request_timeout)
+          timeout: request_timeout,
+          headers: user_auth_headers(user))
 
         watcher_id = response[:events]&.first&.dig("watcherId") ||
                      response["watcherId"] ||
@@ -192,7 +213,11 @@ module E2B
         raise E2B::E2BError, "Failed to create watcher: no watcher_id returned" unless watcher_id
 
         rpc_proc = method(:envd_rpc)
-        WatchHandle.new(watcher_id: watcher_id, envd_rpc_proc: rpc_proc)
+        WatchHandle.new(
+          watcher_id: watcher_id,
+          envd_rpc_proc: rpc_proc,
+          headers: user_auth_headers(user)
+        )
       end
 
       # Backward-compatible aliases
@@ -209,6 +234,7 @@ module E2B
 
       # Build URL for file operations
       def build_file_url(endpoint, path: nil, user: nil)
+        user = resolve_username(user)
         base = "https://#{ENVD_PORT}-#{@sandbox_id}.#{@sandbox_domain}"
         url = "#{base}#{endpoint}"
         params = []
@@ -255,7 +281,7 @@ module E2B
             raise E2B::E2BError, "File upload failed: HTTP #{response.code}"
           end
 
-          true
+          parse_upload_response(response.body)
         end
       end
 
@@ -285,6 +311,14 @@ module E2B
         request["X-Access-Token"] = @access_token if @access_token
         request["Connection"] = "keep-alive"
         request["User-Agent"] = "e2b-ruby-sdk/#{E2B::VERSION}"
+      end
+
+      def parse_upload_response(body)
+        return [] if body.nil? || body.empty?
+
+        JSON.parse(body)
+      rescue JSON::ParserError
+        []
       end
 
       def ssl_verify_mode
@@ -367,6 +401,19 @@ module E2B
         end
 
         nil
+      end
+
+      def build_write_info(result, default_path:)
+        case result
+        when Array
+          entry = result.first
+          return build_write_info(entry, default_path: default_path) if entry
+        when Hash
+          path = result["path"] || result[:path] || default_path
+          return Models::WriteInfo.new(path: path)
+        end
+
+        Models::WriteInfo.new(path: default_path)
       end
     end
   end

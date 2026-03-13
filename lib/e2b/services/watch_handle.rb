@@ -38,9 +38,10 @@ module E2B
       # @param envd_rpc_proc [Proc] A callable that performs RPC calls. It must accept
       #   three positional arguments (service, method) and keyword arguments (body:, timeout:).
       #   Typically a lambda wrapping {BaseService#envd_rpc}.
-      def initialize(watcher_id:, envd_rpc_proc:)
+      def initialize(watcher_id:, envd_rpc_proc:, headers: nil)
         @watcher_id = watcher_id
         @envd_rpc_proc = envd_rpc_proc
+        @headers = headers
         @stopped = false
       end
 
@@ -56,7 +57,8 @@ module E2B
 
         response = @envd_rpc_proc.call(
           "filesystem.Filesystem", "GetWatcherEvents",
-          body: { watcherId: @watcher_id }
+          body: { watcherId: @watcher_id },
+          headers: @headers
         )
 
         events = extract_events(response)
@@ -75,7 +77,8 @@ module E2B
 
         @envd_rpc_proc.call(
           "filesystem.Filesystem", "RemoveWatcher",
-          body: { watcherId: @watcher_id }
+          body: { watcherId: @watcher_id },
+          headers: @headers
         )
         @stopped = true
       rescue StandardError

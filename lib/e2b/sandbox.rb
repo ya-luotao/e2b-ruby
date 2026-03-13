@@ -2,6 +2,10 @@
 
 require "time"
 require "securerandom"
+require "base64"
+require "digest"
+require "json"
+require "rubygems/version"
 
 module E2B
   # Represents an E2B Sandbox instance
@@ -28,6 +32,12 @@ module E2B
 
     # Default sandbox timeout in seconds
     DEFAULT_TIMEOUT = 300
+
+    # Default template used when enabling MCP without an explicit template.
+    DEFAULT_MCP_TEMPLATE = "mcp-gateway"
+
+    # MCP gateway port.
+    MCP_PORT = 50005
 
     # @return [String] Unique sandbox ID
     attr_reader :sandbox_id
@@ -56,8 +66,17 @@ module E2B
     # @return [Hash] Metadata
     attr_reader :metadata
 
+    # @return [String, nil] Current sandbox state
+    attr_reader :state
+
+    # @return [String, nil] Envd version reported by the control plane
+    attr_reader :envd_version
+
     # @return [String, nil] Access token for envd authentication
     attr_reader :envd_access_token
+
+    # @return [String, nil] Access token required for proxied public traffic
+    attr_reader :traffic_access_token
 
     # @return [Services::Commands] Command execution service
     attr_reader :commands
@@ -76,6 +95,8 @@ module E2B
     # -------------------------------------------------------------------
 
     class << self
+      include SandboxHelpers
+
       # Create a new sandbox
       #
       # @param template [String] Template ID or alias (default: "base")
@@ -91,27 +112,44 @@ module E2B
       #   sandbox = E2B::Sandbox.create(template: "base")
       #   sandbox = E2B::Sandbox.create(template: "python", timeout: 600)
       def create(template: "base", timeout: DEFAULT_TIMEOUT, metadata: nil,
-                 envs: nil, api_key: nil, domain: nil,
+                 envs: nil, secure: true, allow_internet_access: true,
+                 network: nil, lifecycle: nil, auto_pause: nil, mcp: nil,
+                 api_key: nil, access_token: nil, domain: nil,
                  request_timeout: 120)
-        api_key = resolve_api_key(api_key)
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
         domain = resolve_domain(domain)
-        http_client = build_http_client(api_key, domain: domain)
+        http_client = build_http_client(**credentials, domain: domain)
+        template = resolved_template(template, mcp: mcp)
+        lifecycle = normalized_lifecycle(lifecycle: lifecycle, auto_pause: auto_pause)
 
         body = {
           templateID: template,
-          timeout: timeout
+          timeout: timeout,
+          secure: secure,
+          allow_internet_access: allow_internet_access,
+          autoPause: lifecycle[:on_timeout] == "pause"
         }
         body[:metadata] = metadata if metadata
         body[:envVars] = envs if envs
+        body[:mcp] = mcp if mcp
+        body[:network] = network if network
+        if body[:autoPause]
+          body[:autoResume] = { enabled: lifecycle[:auto_resume] }
+        end
 
         response = http_client.post("/sandboxes", body: body, timeout: request_timeout)
+        ensure_supported_envd_version!(response, http_client)
 
-        new(
+        sandbox = new(
           sandbox_data: response,
           http_client: http_client,
-          api_key: api_key,
+          api_key: credentials[:api_key],
           domain: domain
         )
+
+        start_mcp_gateway(sandbox, mcp) if mcp
+
+        sandbox
       end
 
       # Connect to an existing running sandbox
@@ -121,22 +159,18 @@ module E2B
       # @param api_key [String, nil] API key
       # @param domain [String] E2B domain
       # @return [Sandbox] The sandbox instance
-      def connect(sandbox_id, timeout: nil, api_key: nil, domain: nil)
-        api_key = resolve_api_key(api_key)
+      def connect(sandbox_id, timeout: DEFAULT_TIMEOUT, api_key: nil, access_token: nil, domain: nil)
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
         domain = resolve_domain(domain)
-        http_client = build_http_client(api_key, domain: domain)
+        http_client = build_http_client(**credentials, domain: domain)
 
-        if timeout
-          response = http_client.post("/sandboxes/#{sandbox_id}/connect",
-            body: { timeout: timeout })
-        else
-          response = http_client.get("/sandboxes/#{sandbox_id}")
-        end
+        response = http_client.post("/sandboxes/#{sandbox_id}/connect",
+          body: { timeout: timeout || DEFAULT_TIMEOUT })
 
         new(
           sandbox_data: response,
           http_client: http_client,
-          api_key: api_key,
+          api_key: credentials[:api_key],
           domain: domain
         )
       end
@@ -148,58 +182,62 @@ module E2B
       # @param next_token [String, nil] Pagination token
       # @param api_key [String, nil] API key
       # @return [Array<Hash>] List of sandbox info hashes
-      def list(query: nil, limit: 100, next_token: nil, api_key: nil)
-        api_key = resolve_api_key(api_key)
-        http_client = build_http_client(api_key)
+      def list(query: nil, limit: 100, next_token: nil, api_key: nil, access_token: nil, domain: nil)
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
+        http_client = build_http_client(**credentials, domain: resolve_domain(domain))
 
-        params = { limit: limit }
-        params[:nextToken] = next_token if next_token
-        if query
-          params[:metadata] = query[:metadata].to_json if query[:metadata]
-          params[:state] = query[:state] if query[:state]
-        end
+        SandboxPaginator.new(
+          http_client: http_client,
+          query: query,
+          limit: limit,
+          next_token: next_token
+        )
+      end
 
-        response = http_client.get("/v2/sandboxes", params: params)
+      # List snapshots for the team, optionally filtered by source sandbox.
+      #
+      # @param sandbox_id [String, nil] Filter snapshots by source sandbox ID
+      # @param limit [Integer] Maximum results per page
+      # @param next_token [String, nil] Pagination token
+      # @return [SnapshotPaginator]
+      def list_snapshots(sandbox_id: nil, limit: 100, next_token: nil, api_key: nil, access_token: nil, domain: nil)
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
+        http_client = build_http_client(**credentials, domain: resolve_domain(domain))
 
-        sandboxes = if response.is_a?(Array)
-                      response
-                    elsif response.is_a?(Hash)
-                      response["sandboxes"] || response[:sandboxes] || []
-                    else
-                      []
-                    end
-        Array(sandboxes)
+        SnapshotPaginator.new(
+          http_client: http_client,
+          sandbox_id: sandbox_id,
+          limit: limit,
+          next_token: next_token
+        )
+      end
+
+      # Delete a snapshot template.
+      #
+      # @param snapshot_id [String] Snapshot identifier
+      # @return [Boolean] true if deleted, false if not found
+      def delete_snapshot(snapshot_id, api_key: nil, access_token: nil, domain: nil)
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
+        http_client = build_http_client(**credentials, domain: resolve_domain(domain))
+        http_client.delete("/templates/#{snapshot_id}")
+        true
+      rescue E2B::NotFoundError
+        false
       end
 
       # Kill a sandbox by ID
       #
       # @param sandbox_id [String] Sandbox ID to kill
       # @param api_key [String, nil] API key
-      def kill(sandbox_id, api_key: nil)
-        api_key = resolve_api_key(api_key)
-        http_client = build_http_client(api_key)
+      def kill(sandbox_id, api_key: nil, access_token: nil, domain: nil)
+        credentials = resolve_credentials(api_key: api_key, access_token: access_token)
+        http_client = build_http_client(**credentials, domain: resolve_domain(domain))
         http_client.delete("/sandboxes/#{sandbox_id}")
         true
       rescue E2B::NotFoundError
         true
       end
 
-      private
-
-      def resolve_api_key(api_key)
-        key = api_key || E2B.configuration&.api_key || ENV["E2B_API_KEY"]
-        raise ConfigurationError, "E2B API key is required. Set E2B_API_KEY or pass api_key:" unless key && !key.empty?
-        key
-      end
-
-      def resolve_domain(domain)
-        domain || E2B.configuration&.domain || ENV["E2B_DOMAIN"] || DEFAULT_DOMAIN
-      end
-
-      def build_http_client(api_key, domain: nil)
-        base_url = E2B.configuration&.api_url || ENV["E2B_API_URL"] || "https://api.#{domain || DEFAULT_DOMAIN}"
-        API::HttpClient.new(base_url: base_url, api_key: api_key)
-      end
     end
 
     # -------------------------------------------------------------------
@@ -238,7 +276,7 @@ module E2B
       return false if @end_at && Time.now >= @end_at
 
       get_info
-      true
+      @state != "paused"
     rescue NotFoundError, E2BError
       false
     end
@@ -264,14 +302,22 @@ module E2B
     # Pause the sandbox (saves state for later resume)
     def pause
       @http_client.post("/sandboxes/#{@sandbox_id}/pause")
+      @state = "paused"
+    end
+
+    # Resume a paused sandbox
+    #
+    # @param timeout [Integer, nil] New timeout in seconds
+    def connect(timeout: nil)
+      resume(timeout: timeout)
+      self
     end
 
     # Resume a paused sandbox
     #
     # @param timeout [Integer, nil] New timeout in seconds
     def resume(timeout: nil)
-      body = {}
-      body[:timeout] = timeout if timeout
+      body = { timeout: timeout || DEFAULT_TIMEOUT }
 
       response = @http_client.post("/sandboxes/#{@sandbox_id}/connect", body: body)
       process_sandbox_data(response) if response.is_a?(Hash)
@@ -281,7 +327,37 @@ module E2B
     #
     # @return [Hash] Snapshot info with snapshot_id
     def create_snapshot
-      @http_client.post("/sandboxes/#{@sandbox_id}/snapshots")
+      response = @http_client.post("/sandboxes/#{@sandbox_id}/snapshots")
+      Models::SnapshotInfo.from_hash(response)
+    end
+
+    # List snapshots that were created from this sandbox.
+    #
+    # @param limit [Integer] Maximum results per page
+    # @param next_token [String, nil] Pagination token
+    # @return [SnapshotPaginator]
+    def list_snapshots(limit: 100, next_token: nil)
+      self.class.list_snapshots(
+        sandbox_id: @sandbox_id,
+        limit: limit,
+        next_token: next_token,
+        api_key: @api_key,
+        domain: @domain
+      )
+    end
+
+    # Get the MCP URL for the sandbox.
+    #
+    # @return [String]
+    def get_mcp_url
+      "https://#{get_host(MCP_PORT)}/mcp"
+    end
+
+    # Get the MCP token for the sandbox.
+    #
+    # @return [String, nil]
+    def get_mcp_token
+      @mcp_token ||= @files.read("/etc/mcp-gateway/.token", user: "root")
     end
 
     # Get the host string for a port (without protocol)
@@ -305,12 +381,16 @@ module E2B
     # @param path [String] File path in the sandbox
     # @param user [String, nil] Username context
     # @return [String] Download URL
-    def download_url(path, user: nil)
-      encoded_path = URI.encode_www_form_component(path)
+    def download_url(path, user: nil, use_signature_expiration: nil)
+      user = resolve_legacy_file_user(user)
+      query = build_file_url_query(
+        path: path,
+        user: user,
+        operation: "read",
+        use_signature_expiration: use_signature_expiration
+      )
       base = "https://#{Services::BaseService::ENVD_PORT}-#{@sandbox_id}.#{@domain}/files"
-      url = "#{base}?path=#{encoded_path}"
-      url += "&username=#{URI.encode_www_form_component(user)}" if user
-      url
+      query.empty? ? base : "#{base}?#{URI.encode_www_form(query)}"
     end
 
     # Get URL for uploading a file
@@ -318,12 +398,16 @@ module E2B
     # @param path [String, nil] Destination path
     # @param user [String, nil] Username context
     # @return [String] Upload URL
-    def upload_url(path = nil, user: nil)
+    def upload_url(path = nil, user: nil, use_signature_expiration: nil)
+      user = resolve_legacy_file_user(user)
       base = "https://#{Services::BaseService::ENVD_PORT}-#{@sandbox_id}.#{@domain}/files"
-      params = []
-      params << "path=#{URI.encode_www_form_component(path)}" if path
-      params << "username=#{URI.encode_www_form_component(user)}" if user
-      params.empty? ? base : "#{base}?#{params.join("&")}"
+      query = build_file_url_query(
+        path: path,
+        user: user,
+        operation: "write",
+        use_signature_expiration: use_signature_expiration
+      )
+      query.empty? ? base : "#{base}?#{URI.encode_www_form(query)}"
     end
 
     # Get sandbox metrics (CPU, memory, disk usage)
@@ -377,8 +461,12 @@ module E2B
       @cpu_count = data["cpuCount"] || data["cpu_count"] || data[:cpuCount]
       @memory_mb = data["memoryMB"] || data["memory_mb"] || data[:memoryMB]
       @metadata = data["metadata"] || data[:metadata] || {}
+      @state = data["state"] || data[:state] || @state
+      @domain = data["domain"] || data[:domain] || @domain
 
+      @envd_version = data["envdVersion"] || data["envd_version"] || data[:envdVersion] || @envd_version
       @envd_access_token = data["envdAccessToken"] || data["envd_access_token"] || data[:envdAccessToken] || @envd_access_token
+      @traffic_access_token = data["trafficAccessToken"] || data["traffic_access_token"] || data[:trafficAccessToken] || @traffic_access_token
 
       @started_at = parse_time(data["startedAt"] || data["started_at"] || data[:startedAt])
       @end_at = parse_time(data["endAt"] || data["end_at"] || data[:endAt])
@@ -389,7 +477,8 @@ module E2B
         sandbox_id: @sandbox_id,
         sandbox_domain: @domain,
         api_key: @api_key,
-        access_token: @envd_access_token
+        access_token: @envd_access_token,
+        envd_version: @envd_version
       }
 
       @commands = Services::Commands.new(**service_opts)
@@ -408,6 +497,62 @@ module E2B
       Time.parse(value)
     rescue ArgumentError
       nil
+    end
+
+    def resolve_legacy_file_user(user)
+      return user unless user.nil? || user.to_s.empty?
+
+      return Services::BaseService::DEFAULT_USERNAME if legacy_default_user?
+
+      nil
+    end
+
+    def legacy_default_user?
+      return false if @envd_version.nil? || @envd_version.to_s.empty?
+
+      Gem::Version.new(@envd_version) < Services::BaseService::ENVD_DEFAULT_USER_VERSION
+    rescue ArgumentError
+      false
+    end
+
+    def build_file_url_query(path:, user:, operation:, use_signature_expiration:)
+      if use_signature_expiration && !@envd_access_token
+        raise ArgumentError, "Signature expiration can be used only when the sandbox is secured"
+      end
+
+      query = []
+      query << ["path", path] if path
+      query << ["username", user] if user
+
+      signature = file_signature(
+        path: path || "",
+        operation: operation,
+        user: user,
+        expiration_in_seconds: use_signature_expiration
+      )
+
+      return query unless signature
+
+      query << ["signature", signature[:signature]]
+      query << ["signature_expiration", signature[:expiration].to_s] if signature[:expiration]
+      query
+    end
+
+    def file_signature(path:, operation:, user:, expiration_in_seconds:)
+      return nil unless @envd_access_token
+
+      expiration = expiration_in_seconds ? Time.now.to_i + expiration_in_seconds : nil
+      raw_user = user || ""
+      raw = if expiration
+              "#{path}:#{operation}:#{raw_user}:#{@envd_access_token}:#{expiration}"
+            else
+              "#{path}:#{operation}:#{raw_user}:#{@envd_access_token}"
+            end
+
+      digest = Digest::SHA256.digest(raw)
+      encoded = Base64.strict_encode64(digest).sub(/=+\z/, "")
+
+      { signature: "v1_#{encoded}", expiration: expiration }
     end
   end
 end

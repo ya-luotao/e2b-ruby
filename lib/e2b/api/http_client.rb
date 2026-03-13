@@ -10,6 +10,8 @@ module E2B
     #
     # Handles authentication, request/response processing, and error handling.
     class HttpClient
+      DetailedResponse = Struct.new(:body, :headers, keyword_init: true)
+
       # Default request timeout in seconds
       DEFAULT_TIMEOUT = 120
 
@@ -19,11 +21,13 @@ module E2B
       # Initialize a new HTTP client
       #
       # @param base_url [String] Base URL for API requests
-      # @param api_key [String] API key for authentication
+      # @param api_key [String, nil] API key for authentication
+      # @param access_token [String, nil] Access token for bearer authentication
       # @param logger [Logger, nil] Optional logger
-      def initialize(base_url:, api_key:, logger: nil)
+      def initialize(base_url:, api_key: nil, access_token: nil, logger: nil)
         @base_url = base_url.end_with?("/") ? base_url : "#{base_url}/"
         @api_key = api_key
+        @access_token = access_token
         @logger = logger
         @connection = build_connection
       end
@@ -34,8 +38,8 @@ module E2B
       # @param params [Hash] Query parameters
       # @param timeout [Integer] Request timeout in seconds
       # @return [Hash, Array, String] Parsed response body
-      def get(path, params: {}, timeout: DEFAULT_TIMEOUT)
-        handle_response do
+      def get(path, params: {}, timeout: DEFAULT_TIMEOUT, detailed: false)
+        handle_response(detailed: detailed) do
           @connection.get(normalize_path(path)) do |req|
             req.params = params
             req.options.timeout = timeout
@@ -49,8 +53,8 @@ module E2B
       # @param body [Hash, nil] Request body
       # @param timeout [Integer] Request timeout in seconds
       # @return [Hash, Array, String] Parsed response body
-      def post(path, body: nil, timeout: DEFAULT_TIMEOUT)
-        handle_response do
+      def post(path, body: nil, timeout: DEFAULT_TIMEOUT, detailed: false)
+        handle_response(detailed: detailed) do
           @connection.post(normalize_path(path)) do |req|
             req.body = body.to_json if body
             req.options.timeout = timeout
@@ -64,8 +68,8 @@ module E2B
       # @param body [Hash, nil] Request body
       # @param timeout [Integer] Request timeout in seconds
       # @return [Hash, Array, String] Parsed response body
-      def put(path, body: nil, timeout: DEFAULT_TIMEOUT)
-        handle_response do
+      def put(path, body: nil, timeout: DEFAULT_TIMEOUT, detailed: false)
+        handle_response(detailed: detailed) do
           @connection.put(normalize_path(path)) do |req|
             req.body = body.to_json if body
             req.options.timeout = timeout
@@ -76,11 +80,13 @@ module E2B
       # Perform a DELETE request
       #
       # @param path [String] API endpoint path
+      # @param body [Hash, nil] Request body
       # @param timeout [Integer] Request timeout in seconds
       # @return [Hash, Array, String, nil] Parsed response body
-      def delete(path, timeout: DEFAULT_TIMEOUT)
-        handle_response do
+      def delete(path, body: nil, timeout: DEFAULT_TIMEOUT, detailed: false)
+        handle_response(detailed: detailed) do
           @connection.delete(normalize_path(path)) do |req|
+            req.body = body.to_json if body
             req.options.timeout = timeout
           end
         end
@@ -100,22 +106,31 @@ module E2B
           conn.response :json, content_type: /\bjson$/
           conn.adapter Faraday.default_adapter
 
-          conn.headers["X-API-Key"] = @api_key
+          conn.headers["X-API-Key"] = @api_key if @api_key && !@api_key.empty?
+          conn.headers["Authorization"] = "Bearer #{@access_token}" if @access_token && !@access_token.empty?
           conn.headers["Content-Type"] = "application/json"
           conn.headers["Accept"] = "application/json"
           conn.headers["User-Agent"] = "e2b-ruby-sdk/#{E2B::VERSION}"
         end
       end
 
-      def handle_response
+      def handle_response(detailed: false)
         response = yield
         handle_error(response) unless response.success?
 
-        body = response.body
+        parsed_body = parse_body(response.body, response.headers)
+        return DetailedResponse.new(body: parsed_body, headers: response.headers.to_h) if detailed
 
-        # If body is a string but should be JSON, try to parse it
+        parsed_body
+      rescue Faraday::TimeoutError => e
+        raise E2B::TimeoutError, "Request timed out: #{e.message}"
+      rescue Faraday::ConnectionFailed => e
+        raise E2B::E2BError, "Connection failed: #{e.message}"
+      end
+
+      def parse_body(body, headers)
         if body.is_a?(String) && !body.empty?
-          content_type = response.headers["content-type"] rescue "unknown"
+          content_type = headers["content-type"] rescue "unknown"
           if content_type&.include?("json") || body.start_with?("{", "[")
             begin
               return JSON.parse(body)
@@ -126,10 +141,6 @@ module E2B
         end
 
         body
-      rescue Faraday::TimeoutError => e
-        raise E2B::TimeoutError, "Request timed out: #{e.message}"
-      rescue Faraday::ConnectionFailed => e
-        raise E2B::E2BError, "Connection failed: #{e.message}"
       end
 
       def handle_error(response)

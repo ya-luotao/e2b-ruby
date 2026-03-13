@@ -4,6 +4,65 @@ require "base64"
 
 module E2B
   module Services
+    # Thread-safe buffer for live command events.
+    #
+    # Allows a producer thread to push envd events while the command handle
+    # drains them on demand from {CommandHandle#each} or {CommandHandle#wait}.
+    class LiveEventStream
+      def initialize
+        @mutex = Mutex.new
+        @condition = ConditionVariable.new
+        @items = []
+        @closed = false
+      end
+
+      def push(event)
+        @mutex.synchronize do
+          return if @closed
+
+          @items << [:event, event]
+          @condition.signal
+        end
+      end
+
+      def fail(error)
+        @mutex.synchronize do
+          return if @closed
+
+          @items << [:error, error]
+          @condition.signal
+        end
+      end
+
+      def close(discard_pending: false)
+        @mutex.synchronize do
+          return if @closed
+
+          @closed = true
+          @items.clear if discard_pending
+          @condition.broadcast
+        end
+      end
+
+      def each
+        return enum_for(:each) unless block_given?
+
+        loop do
+          item = @mutex.synchronize do
+            @condition.wait(@mutex) while @items.empty? && !@closed
+            @items.shift
+          end
+
+          break unless item
+
+          type, payload = item
+          raise payload if type == :error
+
+          yield payload
+        end
+      end
+    end
+
     # Result of a command execution in the sandbox.
     #
     # Returned by {CommandHandle#wait} when the command finishes successfully.
@@ -92,25 +151,29 @@ module E2B
       # @param pid [Integer, nil] Process ID
       # @param handle_kill [Proc] Proc that sends SIGKILL to the process
       # @param handle_send_stdin [Proc] Proc that sends data to stdin/pty
+      # @param handle_disconnect [Proc, nil] Proc that disconnects the event stream
       # @param events_proc [Proc, nil] Proc that accepts a block and yields
       #   parsed events as they arrive. Each event is a Hash with keys like
       #   "event" => { "Start" => ..., "Data" => ..., "End" => ... }.
       #   May be nil if the result is already materialized.
       # @param result [Hash, nil] Pre-materialized result from a synchronous
       #   RPC call. Expected keys: :events, :stdout, :stderr, :exit_code.
-      def initialize(pid:, handle_kill:, handle_send_stdin:, events_proc: nil, result: nil)
+      def initialize(pid:, handle_kill:, handle_send_stdin:, handle_disconnect: nil, events_proc: nil, result: nil)
         @pid = pid
         @handle_kill = handle_kill
         @handle_send_stdin = handle_send_stdin
+        @handle_disconnect = handle_disconnect
         @events_proc = events_proc
         @result = result
         @disconnected = false
         @finished = false
+        @completed = false
         @stdout = ""
         @stderr = ""
         @exit_code = nil
         @error = nil
         @mutex = Mutex.new
+        @materialized_event_index = 0
       end
 
       # Wait for the command to finish and return the result.
@@ -126,6 +189,10 @@ module E2B
       # @raise [CommandExitError] if exit code is non-zero
       def wait(on_stdout: nil, on_stderr: nil, on_pty: nil)
         consume_events(on_stdout: on_stdout, on_stderr: on_stderr, on_pty: on_pty)
+        unless @disconnected || completed?
+          raise E2BError, "Command ended without an end event"
+        end
+
         build_result.tap do |cmd_result|
           unless cmd_result.success?
             raise CommandExitError.new(
@@ -162,7 +229,10 @@ module E2B
       #
       # @return [void]
       def disconnect
+        return if @disconnected
+
         @disconnected = true
+        @handle_disconnect&.call
       end
 
       # Iterate over command output as it arrives.
@@ -201,11 +271,9 @@ module E2B
         each do |stdout_chunk, stderr_chunk, pty_chunk|
           if stdout_chunk
             on_stdout&.call(stdout_chunk)
-            @mutex.synchronize { @stdout += stdout_chunk }
           end
           if stderr_chunk
             on_stderr&.call(stderr_chunk)
-            @mutex.synchronize { @stderr += stderr_chunk }
           end
           if pty_chunk
             on_pty&.call(pty_chunk)
@@ -222,22 +290,12 @@ module E2B
       #
       # @return [CommandResult]
       def build_result
-        if @result && !@finished
-          # Use the pre-materialized result from the synchronous RPC call
-          CommandResult.new(
-            stdout: @result[:stdout] || "",
-            stderr: @result[:stderr] || "",
-            exit_code: @result[:exit_code] || 0,
-            error: @result[:error]
-          )
-        else
-          CommandResult.new(
-            stdout: @stdout,
-            stderr: @stderr,
-            exit_code: @exit_code || 0,
-            error: @error
-          )
-        end
+        CommandResult.new(
+          stdout: resolved_stdout,
+          stderr: resolved_stderr,
+          exit_code: resolved_exit_code || 0,
+          error: resolved_error
+        )
       end
 
       # Iterate over events from a pre-materialized result hash.
@@ -249,14 +307,14 @@ module E2B
       # @yield [stdout, stderr, pty]
       # @return [void]
       def iterate_materialized_events
-        events = @result[:events] || []
-        events.each do |event_hash|
+        events = result_value(:events) || []
+        while @materialized_event_index < events.length
           break if @disconnected
 
-          next unless event_hash.is_a?(Hash) && event_hash["event"]
+          event_hash = events[@materialized_event_index]
+          @materialized_event_index += 1
 
-          event = event_hash["event"]
-          process_event(event) do |stdout_chunk, stderr_chunk, pty_chunk|
+          process_message(event_hash) do |stdout_chunk, stderr_chunk, pty_chunk|
             yield stdout_chunk, stderr_chunk, pty_chunk
           end
         end
@@ -270,24 +328,57 @@ module E2B
       # @yield [stdout, stderr, pty]
       # @return [void]
       def iterate_streaming_events
-        @events_proc.call do |event_hash|
-          break if @disconnected
+        catch(:stop_iteration) do
+          @events_proc.call do |event_hash|
+            throw :stop_iteration if @disconnected
 
-          next unless event_hash.is_a?(Hash) && event_hash["event"]
-
-          event = event_hash["event"]
-          process_event(event) do |stdout_chunk, stderr_chunk, pty_chunk|
-            yield stdout_chunk, stderr_chunk, pty_chunk
+            process_message(event_hash) do |stdout_chunk, stderr_chunk, pty_chunk|
+              yield stdout_chunk, stderr_chunk, pty_chunk
+            end
           end
         end
       end
 
-      # Process a single event from the stream, extracting output data.
+      # Process a single stream message, extracting output data.
+      #
+      # Messages usually arrive with an "event" wrapper from the envd process
+      # service, but some paths also surface top-level stdout/stderr/exitCode
+      # fields. This method handles both shapes.
       #
       # Event shapes from the envd process service:
       # - Start: { "Start" => { "pid" => 123 } }
       # - Data:  { "Data"  => { "stdout" => "base64", "stderr" => "base64", "pty" => "base64" } }
       # - End:   { "End"   => { "exitCode" => 0, "error" => "...", "status" => "..." } }
+      #
+      # @param message [Hash] A raw stream message
+      # @yield [stdout, stderr, pty]
+      # @return [void]
+      def process_message(message)
+        return unless message.is_a?(Hash)
+
+        event = message["event"]
+        process_event(event) { |stdout_chunk, stderr_chunk, pty_chunk| yield stdout_chunk, stderr_chunk, pty_chunk } if event.is_a?(Hash)
+
+        if event.nil?
+          stdout_chunk = decode_base64(message["stdout"])
+          stderr_chunk = decode_base64(message["stderr"])
+
+          if stdout_chunk && !stdout_chunk.empty?
+            append_stdout(stdout_chunk)
+            yield(stdout_chunk, nil, nil)
+          end
+
+          if stderr_chunk && !stderr_chunk.empty?
+            append_stderr(stderr_chunk)
+            yield(nil, stderr_chunk, nil)
+          end
+        end
+
+        exit_value = message["exitCode"] || message["exit_code"]
+        complete!(exit_value, message["error"]) if exit_value
+      end
+
+      # Process a single event from the stream, extracting output data.
       #
       # @param event [Hash] The event sub-hash (value of "event" key)
       # @yield [stdout, stderr, pty]
@@ -300,8 +391,16 @@ module E2B
           stderr_chunk = decode_base64(data_event["stderr"])
           pty_chunk = decode_base64(data_event["pty"])
 
-          yield(stdout_chunk, nil, nil) if stdout_chunk && !stdout_chunk.empty?
-          yield(nil, stderr_chunk, nil) if stderr_chunk && !stderr_chunk.empty?
+          if stdout_chunk && !stdout_chunk.empty?
+            append_stdout(stdout_chunk)
+            yield(stdout_chunk, nil, nil)
+          end
+
+          if stderr_chunk && !stderr_chunk.empty?
+            append_stderr(stderr_chunk)
+            yield(nil, stderr_chunk, nil)
+          end
+
           yield(nil, nil, pty_chunk) if pty_chunk && !pty_chunk.empty?
         end
 
@@ -310,8 +409,62 @@ module E2B
         return unless end_event
 
         exit_value = end_event["exitCode"] || end_event["exit_code"] || end_event["status"]
-        @exit_code = parse_exit_code(exit_value)
-        @error = end_event["error"] if end_event["error"] && !end_event["error"].empty?
+        complete!(exit_value, end_event["error"])
+      end
+
+      def append_stdout(chunk)
+        @mutex.synchronize { @stdout += chunk }
+      end
+
+      def append_stderr(chunk)
+        @mutex.synchronize { @stderr += chunk }
+      end
+
+      def complete!(exit_value, error_value)
+        @mutex.synchronize do
+          @completed = true
+          @exit_code = parse_exit_code(exit_value)
+          @error = error_value if error_value && !error_value.empty?
+        end
+      end
+
+      def completed?
+        return true if @completed
+
+        !result_value(:exit_code, "exit_code", "exitCode").nil?
+      end
+
+      def resolved_stdout
+        fallback = result_value(:stdout, "stdout")
+        @stdout.empty? && fallback ? fallback : @stdout
+      end
+
+      def resolved_stderr
+        fallback = result_value(:stderr, "stderr")
+        @stderr.empty? && fallback ? fallback : @stderr
+      end
+
+      def resolved_exit_code
+        return @exit_code unless @exit_code.nil?
+
+        raw_exit_code = result_value(:exit_code, "exit_code", "exitCode")
+        return nil if raw_exit_code.nil?
+
+        parse_exit_code(raw_exit_code)
+      end
+
+      def resolved_error
+        @error || result_value(:error, "error")
+      end
+
+      def result_value(*keys)
+        return nil unless @result.is_a?(Hash)
+
+        keys.each do |key|
+          return @result[key] if @result.key?(key)
+        end
+
+        nil
       end
 
       # Decode a base64-encoded string.

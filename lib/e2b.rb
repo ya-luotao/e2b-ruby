@@ -7,17 +7,30 @@
 require_relative "e2b/version"
 require_relative "e2b/errors"
 require_relative "e2b/configuration"
+require_relative "e2b/sandbox_helpers"
+require_relative "e2b/ready_cmd"
+require_relative "e2b/dockerfile_parser"
+require_relative "e2b/template_logger"
 
 # API layer
 require_relative "e2b/api/http_client"
+require_relative "e2b/paginator"
 
 # Models
+require_relative "e2b/models/build_info"
+require_relative "e2b/models/build_status_reason"
 require_relative "e2b/models/sandbox_info"
+require_relative "e2b/models/snapshot_info"
+require_relative "e2b/models/template_build_status_response"
+require_relative "e2b/models/template_log_entry"
+require_relative "e2b/models/template_tag"
+require_relative "e2b/models/template_tag_info"
 require_relative "e2b/models/process_result"
 require_relative "e2b/models/entry_info"
 
 # Services
 require_relative "e2b/services/base_service"
+require_relative "e2b/services/live_streamable"
 require_relative "e2b/services/command_handle"
 require_relative "e2b/services/commands"
 require_relative "e2b/services/filesystem"
@@ -28,6 +41,7 @@ require_relative "e2b/services/git"
 # Core classes
 require_relative "e2b/sandbox"
 require_relative "e2b/client"
+require_relative "e2b/template"
 
 # E2B SDK for Ruby
 #
@@ -58,6 +72,8 @@ require_relative "e2b/client"
 #
 # @see https://e2b.dev/docs E2B Documentation
 module E2B
+  ALL_TRAFFIC = "0.0.0.0/0"
+
   class << self
     # @return [Configuration, nil] Global configuration
     attr_accessor :configuration

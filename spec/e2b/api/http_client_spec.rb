@@ -3,9 +3,11 @@
 require "spec_helper"
 
 RSpec.describe E2B::API::HttpClient do
-  subject(:client) { described_class.new(base_url: base_url, api_key: "test-key") }
+  subject(:client) { described_class.new(base_url: base_url, api_key: api_key, access_token: access_token) }
 
   let(:base_url) { "https://api.example.test" }
+  let(:api_key) { "test-key" }
+  let(:access_token) { nil }
 
   describe "#get" do
     it "parses JSON string responses when the content type is JSON" do
@@ -28,6 +30,38 @@ RSpec.describe E2B::API::HttpClient do
         )
 
       expect(client.get("/health")).to eq({ "ok" => true })
+    end
+
+    it "sends bearer authorization when initialized with an access token" do
+      stub_request(:get, "#{base_url}/sandboxes")
+        .with(headers: { "Authorization" => "Bearer access-token" })
+        .to_return(
+          status: 200,
+          body: '{"sandboxID":"sbx_123"}',
+          headers: { "Content-Type" => "application/json" }
+        )
+
+      described_class.new(base_url: base_url, access_token: "access-token").get("/sandboxes")
+
+      expect(a_request(:get, "#{base_url}/sandboxes")
+        .with(headers: { "Authorization" => "Bearer access-token" })).to have_been_made
+    end
+
+    it "can return parsed bodies with response headers" do
+      stub_request(:get, "#{base_url}/sandboxes")
+        .to_return(
+          status: 200,
+          body: '[{"sandboxID":"sbx_123"}]',
+          headers: {
+            "Content-Type" => "application/json",
+            "X-Next-Token" => "page-2"
+          }
+        )
+
+      response = client.get("/sandboxes", detailed: true)
+
+      expect(response.body).to eq([{ "sandboxID" => "sbx_123" }])
+      expect(response.headers["x-next-token"]).to eq("page-2")
     end
   end
 
@@ -80,6 +114,20 @@ RSpec.describe E2B::API::HttpClient do
 
       expect { client.get("/offline") }
         .to raise_error(E2B::E2BError, /Connection failed: connection refused/)
+    end
+  end
+
+  describe "#delete" do
+    it "sends JSON bodies when provided" do
+      stub_request(:delete, "#{base_url}/templates/tags")
+        .with(body: { name: "my-template", tags: ["stable"] }.to_json)
+        .to_return(
+          status: 204,
+          body: "",
+          headers: { "Content-Type" => "application/json" }
+        )
+
+      expect(client.delete("/templates/tags", body: { name: "my-template", tags: ["stable"] })).to be_nil
     end
   end
 end

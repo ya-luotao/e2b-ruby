@@ -24,6 +24,7 @@ module E2B
     #   handle = sandbox.commands.run("sleep 10", background: true)
     #   handle.kill
     class Commands < BaseService
+      include LiveStreamable
       # Run a command in the sandbox
       #
       # @param cmd [String] Command to execute (run via /bin/bash -l -c)
@@ -55,8 +56,10 @@ module E2B
         process_spec[:cwd] = cwd if cwd
 
         body = { process: process_spec }
+        headers = user_auth_headers(user)
 
         # Set up streaming callback
+        stream_block = block if block_given?
         streaming_callback = nil
         if on_stdout || on_stderr || block_given?
           streaming_callback = lambda { |event_data|
@@ -66,46 +69,45 @@ module E2B
             on_stdout&.call(stdout_chunk) if stdout_chunk && !stdout_chunk.empty?
             on_stderr&.call(stderr_chunk) if stderr_chunk && !stderr_chunk.empty?
 
-            if block_given?
-              yield(:stdout, stdout_chunk) if stdout_chunk && !stdout_chunk.empty?
-              yield(:stderr, stderr_chunk) if stderr_chunk && !stderr_chunk.empty?
-            end
+            stream_block&.call(:stdout, stdout_chunk) if stdout_chunk && !stdout_chunk.empty?
+            stream_block&.call(:stderr, stderr_chunk) if stderr_chunk && !stderr_chunk.empty?
           }
         end
 
         effective_timeout = request_timeout || (timeout + 30)
 
+        if background
+          return build_live_handle(
+            rpc_method: "Start",
+            body: body,
+            timeout: effective_timeout,
+            headers: headers,
+            on_stdout: on_stdout,
+            on_stderr: on_stderr,
+            &block
+          )
+        end
+
         response = envd_rpc("process.Process", "Start",
           body: body,
           timeout: effective_timeout,
+          headers: headers,
           on_event: streaming_callback)
 
-        pid = extract_pid(response)
+        # Return CommandResult for foreground processes
+        result = build_result(response)
 
-        if background
-          # Return a CommandHandle for background processes
-          CommandHandle.new(
-            pid: pid,
-            handle_kill: -> { kill(pid) },
-            handle_send_stdin: ->(data) { send_stdin(pid, data) },
-            result: response
+        # Raise on non-zero exit code (matching official SDK behavior)
+        if result.exit_code != 0
+          raise CommandExitError.new(
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exit_code: result.exit_code,
+            error: result.error
           )
-        else
-          # Return CommandResult for foreground processes
-          result = build_result(response)
-
-          # Raise on non-zero exit code (matching official SDK behavior)
-          if result.exit_code != 0
-            raise CommandExitError.new(
-              stdout: result.stdout,
-              stderr: result.stderr,
-              exit_code: result.exit_code,
-              error: result.error
-            )
-          end
-
-          result
         end
+
+        result
       end
 
       # List running processes
@@ -133,12 +135,13 @@ module E2B
       # @param pid [Integer] Process ID to kill
       # @param request_timeout [Integer, nil] Request timeout in seconds
       # @return [Boolean] true if killed, false if not found
-      def kill(pid, request_timeout: nil)
+      def kill(pid, request_timeout: nil, headers: nil)
         envd_rpc("process.Process", "SendSignal",
           body: {
             process: { pid: pid },
             signal: 9 # SIGKILL
           },
+          headers: headers,
           timeout: request_timeout || 30)
         true
       rescue E2B::NotFoundError
@@ -152,13 +155,14 @@ module E2B
       # @param pid [Integer] Process ID
       # @param data [String] Data to send to stdin
       # @param request_timeout [Integer, nil] Request timeout in seconds
-      def send_stdin(pid, data, request_timeout: nil)
+      def send_stdin(pid, data, request_timeout: nil, headers: nil)
         encoded = Base64.strict_encode64(data.to_s)
         envd_rpc("process.Process", "SendInput",
           body: {
             process: { pid: pid },
             input: { stdin: encoded }
           },
+          headers: headers,
           timeout: request_timeout || 30)
       end
 
@@ -169,32 +173,15 @@ module E2B
       # @param request_timeout [Integer, nil] Request timeout in seconds
       # @return [CommandHandle] Handle for the connected process
       def connect(pid, timeout: 60, request_timeout: nil)
-        response = envd_rpc("process.Process", "Connect",
+        build_live_handle(
+          rpc_method: "Connect",
           body: { process: { pid: pid } },
-          timeout: request_timeout || (timeout + 30))
-
-        CommandHandle.new(
-          pid: pid,
-          handle_kill: -> { kill(pid) },
-          handle_send_stdin: ->(data) { send_stdin(pid, data) },
-          result: response
+          headers: user_auth_headers(nil),
+          timeout: request_timeout || (timeout + 30)
         )
       end
 
       private
-
-      # Extract PID from streaming response events
-      def extract_pid(response)
-        events = response[:events] || []
-        events.each do |event|
-          next unless event.is_a?(Hash) && event["event"]
-          start_event = event["event"]["Start"] || event["event"]["start"]
-          if start_event && start_event["pid"]
-            return start_event["pid"].to_i
-          end
-        end
-        nil
-      end
 
       # Build CommandResult from response
       def build_result(response)

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "rubygems/version"
+
 module E2B
   # Client for interacting with the E2B API
   #
@@ -14,6 +16,8 @@ module E2B
   # @example Using Sandbox directly (recommended, matches official SDK)
   #   sandbox = E2B::Sandbox.create(template: "base", api_key: "your-key")
   class Client
+    include SandboxHelpers
+
     # @return [Configuration] Client configuration
     attr_reader :config
 
@@ -30,10 +34,11 @@ module E2B
       @http_client = API::HttpClient.new(
         base_url: @config.api_url,
         api_key: @config.api_key,
+        access_token: @config.access_token,
         logger: @config.logger
       )
 
-      @domain = Sandbox::DEFAULT_DOMAIN
+      @domain = @config.domain
     end
 
     # Create a new sandbox
@@ -44,7 +49,9 @@ module E2B
     # @param metadata [Hash, nil] Custom metadata
     # @param envs [Hash{String => String}, nil] Environment variables
     # @return [Sandbox] The created sandbox instance
-    def create(template: "base", timeout: nil, timeout_ms: nil, metadata: nil, envs: nil, **_opts)
+    def create(template: "base", timeout: nil, timeout_ms: nil, metadata: nil, envs: nil,
+               secure: true, allow_internet_access: true, network: nil,
+               lifecycle: nil, auto_pause: nil, mcp: nil, request_timeout: nil, **_opts)
       # Support both seconds and milliseconds for backward compat
       timeout_seconds = if timeout
                           timeout
@@ -53,22 +60,37 @@ module E2B
                         else
                           (@config.sandbox_timeout_ms / 1000).to_i
                         end
+      template = resolved_template(template, mcp: mcp)
+      lifecycle = normalized_lifecycle(lifecycle: lifecycle, auto_pause: auto_pause)
 
       body = {
         templateID: template,
-        timeout: timeout_seconds
+        timeout: timeout_seconds,
+        secure: secure,
+        allow_internet_access: allow_internet_access,
+        autoPause: lifecycle[:on_timeout] == "pause"
       }
       body[:metadata] = metadata if metadata
       body[:envVars] = envs if envs
+      body[:mcp] = mcp if mcp
+      body[:network] = network if network
+      if body[:autoPause]
+        body[:autoResume] = { enabled: lifecycle[:auto_resume] }
+      end
 
-      response = @http_client.post("/sandboxes", body: body, timeout: 120)
+      response = @http_client.post("/sandboxes", body: body, timeout: request_timeout || @config.request_timeout || 120)
+      ensure_supported_envd_version!(response, @http_client)
 
-      Sandbox.new(
+      sandbox = Sandbox.new(
         sandbox_data: response,
         http_client: @http_client,
         api_key: @config.api_key,
         domain: @domain
       )
+
+      start_mcp_gateway(sandbox, mcp) if mcp
+
+      sandbox
     end
 
     # Connect to an existing sandbox
@@ -77,12 +99,9 @@ module E2B
     # @param timeout [Integer, nil] Timeout in seconds
     # @return [Sandbox]
     def connect(sandbox_id, timeout: nil)
-      if timeout
-        response = @http_client.post("/sandboxes/#{sandbox_id}/connect",
-          body: { timeout: timeout })
-      else
-        response = @http_client.get("/sandboxes/#{sandbox_id}")
-      end
+      timeout_seconds = timeout || ((@config.sandbox_timeout_ms || (Sandbox::DEFAULT_TIMEOUT * 1000)) / 1000).to_i
+      response = @http_client.post("/sandboxes/#{sandbox_id}/connect",
+        body: { timeout: timeout_seconds })
 
       Sandbox.new(
         sandbox_data: response,
@@ -112,29 +131,18 @@ module E2B
     # @param metadata [Hash, nil] Filter by metadata
     # @param state [String, nil] Filter by state
     # @param limit [Integer] Maximum results
-    # @return [Array<Sandbox>]
-    def list(metadata: nil, state: nil, limit: 100)
-      params = { limit: limit }
-      params[:metadata] = metadata.to_json if metadata
-      params[:state] = state if state
+    # @return [SandboxPaginator]
+    def list(metadata: nil, state: nil, limit: 100, next_token: nil)
+      query = {}
+      query[:metadata] = metadata if metadata
+      query[:state] = state if state
 
-      response = @http_client.get("/v2/sandboxes", params: params)
-
-      sandboxes = if response.is_a?(Array)
-                    response
-                  elsif response.is_a?(Hash)
-                    response["sandboxes"] || response[:sandboxes] || []
-                  else
-                    []
-                  end
-      Array(sandboxes).map do |sandbox_data|
-        Sandbox.new(
-          sandbox_data: sandbox_data,
-          http_client: @http_client,
-          api_key: @config.api_key,
-          domain: @domain
-        )
-      end
+      SandboxPaginator.new(
+        http_client: @http_client,
+        query: query.empty? ? nil : query,
+        limit: limit,
+        next_token: next_token
+      )
     end
 
     # Kill a sandbox
@@ -170,8 +178,8 @@ module E2B
     # @param timeout [Integer, nil] New timeout in seconds
     # @return [Sandbox]
     def resume(sandbox_id, timeout: nil)
-      body = {}
-      body[:timeout] = timeout if timeout
+      timeout_seconds = timeout || ((@config.sandbox_timeout_ms || (Sandbox::DEFAULT_TIMEOUT * 1000)) / 1000).to_i
+      body = { timeout: timeout_seconds }
 
       response = @http_client.post("/sandboxes/#{sandbox_id}/connect", body: body)
 
@@ -181,6 +189,41 @@ module E2B
         api_key: @config.api_key,
         domain: @domain
       )
+    end
+
+    # Create a snapshot from an existing sandbox.
+    #
+    # @param sandbox_id [String] Source sandbox ID
+    # @return [Models::SnapshotInfo]
+    def create_snapshot(sandbox_id)
+      response = @http_client.post("/sandboxes/#{sandbox_id}/snapshots")
+      Models::SnapshotInfo.from_hash(response)
+    end
+
+    # List snapshots for the team, optionally filtered by source sandbox.
+    #
+    # @param sandbox_id [String, nil] Filter snapshots by source sandbox ID
+    # @param limit [Integer] Maximum results per page
+    # @param next_token [String, nil] Pagination token
+    # @return [SnapshotPaginator]
+    def list_snapshots(sandbox_id: nil, limit: 100, next_token: nil)
+      SnapshotPaginator.new(
+        http_client: @http_client,
+        sandbox_id: sandbox_id,
+        limit: limit,
+        next_token: next_token
+      )
+    end
+
+    # Delete a snapshot template.
+    #
+    # @param snapshot_id [String] Snapshot identifier
+    # @return [Boolean]
+    def delete_snapshot(snapshot_id)
+      @http_client.delete("/templates/#{snapshot_id}")
+      true
+    rescue NotFoundError
+      false
     end
 
     private
