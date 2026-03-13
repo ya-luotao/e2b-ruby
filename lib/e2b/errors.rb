@@ -49,10 +49,30 @@ module E2B
   class NotEnoughSpaceError < E2BError; end
 
   # Error raised for template-related failures
-  class TemplateError < E2BError; end
+  class TemplateError < E2BError
+    attr_reader :source_location
+
+    def initialize(message = nil, status_code: nil, headers: {}, source_location: nil)
+      @source_location = source_location
+      super(message, status_code: status_code, headers: headers)
+      set_backtrace([source_location]) if source_location
+    end
+  end
 
   # Error raised when a template build fails or returns an invalid status
-  class BuildError < E2BError; end
+  class BuildError < E2BError
+    attr_reader :step, :source_location
+
+    def initialize(message = nil, status_code: nil, headers: {}, step: nil, source_location: nil)
+      @step = step
+      @source_location = source_location
+      super(message, status_code: status_code, headers: headers)
+      set_backtrace([source_location]) if source_location
+    end
+  end
+
+  # Error raised when file upload fails during a template build
+  class FileUploadError < BuildError; end
 
   # Error raised when a command exits with non-zero exit code
   #

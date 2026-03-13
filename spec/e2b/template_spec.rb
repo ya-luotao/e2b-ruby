@@ -3,6 +3,7 @@
 require "spec_helper"
 require "stringio"
 require "tmpdir"
+require "zlib"
 
 RSpec.describe E2B::Template do
   let(:http_client) { instance_double(E2B::API::HttpClient) }
@@ -213,6 +214,39 @@ RSpec.describe E2B::Template do
         described_class.wait_for_build_finish(build_info, api_key: "api-key")
       }.to raise_error(E2B::BuildError, "Build failed")
     end
+
+    it "maps failed build steps back to recorded template source locations" do
+      error_status = E2B::Models::TemplateBuildStatusResponse.new(
+        build_id: "bld_123",
+        template_id: "tpl_123",
+        status: "error",
+        logs: [],
+        log_entries: [],
+        reason: E2B::Models::BuildStatusReason.new(message: "COPY failed", step: "1")
+      )
+      build_info_with_origins = E2B::Models::BuildInfo.new(
+        alias_name: "my-template",
+        name: "my-template",
+        tags: ["stable"],
+        template_id: "tpl_123",
+        build_id: "bld_123",
+        build_step_origins: [
+          "spec/templates/base.rb:1:in `new'",
+          "spec/templates/copy.rb:2:in `copy'"
+        ]
+      )
+
+      allow(described_class).to receive(:get_build_status).and_return(error_status)
+
+      expect {
+        described_class.wait_for_build_finish(build_info_with_origins, api_key: "api-key")
+      }.to raise_error(E2B::BuildError) { |error|
+        expect(error.message).to eq("COPY failed")
+        expect(error.step).to eq("1")
+        expect(error.source_location).to eq("spec/templates/copy.rb:2:in `copy'")
+        expect(error.backtrace).to eq(["spec/templates/copy.rb:2:in `copy'"])
+      }
+    end
   end
 
   describe "ready command helpers" do
@@ -357,7 +391,11 @@ RSpec.describe E2B::Template do
 
       expect {
         template.copy("../secrets.txt", "/app/")
-      }.to raise_error(E2B::TemplateError, /path escapes the context directory/)
+      }.to raise_error(E2B::TemplateError) { |error|
+        expect(error.message).to match(/path escapes the context directory/)
+        expect(error.source_location).to include(__FILE__)
+        expect(error.backtrace).to eq([error.source_location])
+      }
     end
 
     it "refuses to convert templates based on other templates to Dockerfiles" do
@@ -365,7 +403,10 @@ RSpec.describe E2B::Template do
 
       expect {
         template.to_dockerfile
-      }.to raise_error(E2B::TemplateError, /Cannot convert template built from another template to Dockerfile/)
+      }.to raise_error(E2B::TemplateError) { |error|
+        expect(error.message).to match(/Cannot convert template built from another template to Dockerfile/)
+        expect(error.source_location).to include(__FILE__)
+      }
     end
 
     it "serializes copy_items and filesystem mutation helpers" do
@@ -461,7 +502,10 @@ RSpec.describe E2B::Template do
 
       expect {
         template.add_mcp_server("exa")
-      }.to raise_error(E2B::BuildError, /MCP servers can only be added to mcp-gateway template/)
+      }.to raise_error(E2B::BuildError) { |error|
+        expect(error.message).to match(/MCP servers can only be added to mcp-gateway template/)
+        expect(error.source_location).to include(__FILE__)
+      }
     end
 
     it "serializes MCP and devcontainer helpers on the matching templates" do
@@ -538,11 +582,13 @@ RSpec.describe E2B::Template do
         expect(build_info).to be_a(E2B::Models::BuildInfo)
         expect(build_info.template_id).to eq("tpl_123")
         expect(build_info.build_id).to eq("bld_123")
+        expect(build_info.build_step_origins.first).to include(__FILE__)
         expect(described_class).to have_received(:upload_file).with(
           template,
           file_name: "app.rb",
           url: "https://upload.example.test/template",
-          resolve_symlinks: true
+          resolve_symlinks: false,
+          source_location: kind_of(String)
         )
         expect(logs).to include(
           "Requesting build for template: my-template with tags stable",
@@ -551,6 +597,68 @@ RSpec.describe E2B::Template do
           "All file uploads completed",
           "Starting building..."
         )
+      end
+    end
+
+    it "wraps file upload link failures in FileUploadError with source attribution" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
+        template = described_class.new(file_context_path: dir)
+          .from_base_image
+          .copy("app.rb", "/app/")
+
+        payload = template.to_h(compute_hashes: true)
+        files_hash = payload[:steps].first[:filesHash]
+
+        allow(http_client).to receive(:post)
+          .with(
+            "/v3/templates",
+            body: {
+              name: "my-template",
+              tags: nil,
+              cpuCount: 2,
+              memoryMB: 1024
+            }
+          )
+          .and_return({
+            "templateID" => "tpl_123",
+            "buildID" => "bld_123",
+            "tags" => []
+          })
+        allow(http_client).to receive(:get)
+          .with("/templates/tpl_123/files/#{files_hash}")
+          .and_raise(E2B::AuthenticationError.new("forbidden", status_code: 403))
+
+        expect {
+          described_class.build_in_background(
+            template,
+            name: "my-template",
+            api_key: "api-key"
+          )
+        }.to raise_error(E2B::FileUploadError) { |error|
+          expect(error.message).to eq("forbidden")
+          expect(error.source_location).to include(__FILE__)
+          expect(error.status_code).to eq(403)
+        }
+      end
+    end
+
+    it "uploads COPY archives as gzipped tarballs" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
+        template = described_class.new(file_context_path: dir)
+          .from_base_image
+          .copy("app.rb", "/app/")
+
+        archive = described_class.send(:build_tar_archive, template, "app.rb", resolve_symlinks: false)
+        tar_data = Zlib::GzipReader.new(StringIO.new(archive)).read
+        paths = []
+
+        Gem::Package::TarReader.new(StringIO.new(tar_data)) do |tar|
+          tar.each { |entry| paths << entry.full_name }
+        end
+
+        expect(paths).to eq(["app.rb"])
       end
     end
 
@@ -621,7 +729,10 @@ RSpec.describe E2B::Template do
 
       expect {
         described_class.new.from_dockerfile(dockerfile)
-      }.to raise_error(E2B::TemplateError, /Multi-stage Dockerfiles are not supported/)
+      }.to raise_error(E2B::TemplateError) { |error|
+        expect(error.message).to match(/Multi-stage Dockerfiles are not supported/)
+        expect(error.source_location).to include(__FILE__)
+      }
     end
   end
 

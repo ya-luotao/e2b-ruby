@@ -6,10 +6,14 @@ require "pathname"
 require "rubygems/package"
 require "stringio"
 require "uri"
+require "zlib"
 
 module E2B
   class Template
     DEFAULT_BASE_IMAGE = "e2bdev/base"
+    DEFAULT_RESOLVE_SYMLINKS = false
+    BASE_STEP_NAME = "base"
+    FINALIZE_STEP_NAME = "finalize"
 
     class << self
       def to_json(template, compute_hashes: true)
@@ -71,7 +75,8 @@ module E2B
         resolved_template_id, resolved_build_id = extract_build_identifiers(
           build_info,
           template_id: template_id,
-          build_id: build_id
+          build_id: build_id,
+          build_step_origins: nil
         )
 
         credentials = resolve_credentials(api_key: api_key, access_token: access_token)
@@ -88,18 +93,25 @@ module E2B
       end
 
       def wait_for_build_finish(build_info = nil, logs_offset: 0, on_build_logs: nil, logs_refresh_frequency: 0.2,
-                                api_key: nil, access_token: nil, domain: nil, template_id: nil, build_id: nil)
+                                api_key: nil, access_token: nil, domain: nil, template_id: nil, build_id: nil,
+                                build_step_origins: nil)
+        resolved_template_id, resolved_build_id, resolved_build_step_origins = extract_build_identifiers(
+          build_info,
+          template_id: template_id,
+          build_id: build_id,
+          build_step_origins: build_step_origins
+        )
         current_logs_offset = logs_offset
 
         loop do
           status = get_build_status(
-            build_info,
+            nil,
             logs_offset: current_logs_offset,
             api_key: api_key,
             access_token: access_token,
             domain: domain,
-            template_id: template_id,
-            build_id: build_id
+            template_id: resolved_template_id,
+            build_id: resolved_build_id
           )
 
           current_logs_offset += status.log_entries.length
@@ -111,9 +123,13 @@ module E2B
           when "ready"
             return status
           when "error"
-            raise BuildError, status.reason&.message || "Unknown build error occurred."
+            raise build_error(
+              status.reason&.message || "Unknown build error occurred.",
+              step: status.reason&.step,
+              source_location: build_step_source_location(status.reason&.step, resolved_build_step_origins)
+            )
           else
-            raise BuildError, "Unknown build status: #{status.status}"
+            raise build_error("Unknown build status: #{status.status}")
           end
         end
       end
@@ -175,7 +191,8 @@ module E2B
           name: resolved_name,
           tags: create_response["tags"] || create_response[:tags] || [],
           template_id: create_response["templateID"] || create_response[:templateID],
-          build_id: create_response["buildID"] || create_response[:buildID]
+          build_id: create_response["buildID"] || create_response[:buildID],
+          build_step_origins: template.send(:build_step_origins)
         )
 
         on_build_logs&.call(
@@ -212,11 +229,14 @@ module E2B
       end
 
       def upload_copy_instructions(http_client, template, build_info, instructions, on_build_logs:)
+        source_location = nil
+
         instructions.each do |instruction|
           next unless instruction[:type] == "COPY"
 
           src = instruction[:args][0]
           files_hash = instruction[:filesHash]
+          source_location = instruction[:sourceLocation]
           response = http_client.get(
             "/templates/#{escape_path_segment(build_info.template_id)}/files/#{escape_path_segment(files_hash)}"
           )
@@ -228,16 +248,24 @@ module E2B
               template,
               file_name: src,
               url: url,
-              resolve_symlinks: instruction[:resolveSymlinks].nil? ? true : instruction[:resolveSymlinks]
+              resolve_symlinks: instruction[:resolveSymlinks],
+              source_location: source_location
             )
             on_build_logs&.call(log_entry("Uploaded '#{src}'"))
           else
             on_build_logs&.call(log_entry("Skipping upload of '#{src}', already cached"))
           end
         end
+      rescue E2BError => e
+        raise file_upload_error(
+          e.message,
+          source_location: source_location,
+          status_code: e.status_code,
+          headers: e.headers
+        )
       end
 
-      def upload_file(template, file_name:, url:, resolve_symlinks:)
+      def upload_file(template, file_name:, url:, resolve_symlinks:, source_location: nil)
         tarball = build_tar_archive(template, file_name, resolve_symlinks: resolve_symlinks)
         response = Faraday.put(url) do |req|
           req.headers["Content-Type"] = "application/octet-stream"
@@ -246,9 +274,9 @@ module E2B
 
         return if response.success?
 
-        raise BuildError, "Failed to upload file: #{response.status}"
+        raise file_upload_error("Failed to upload file: #{response.status}", source_location: source_location)
       rescue Faraday::Error => e
-        raise BuildError, "Failed to upload file: #{e.message}"
+        raise file_upload_error("Failed to upload file: #{e.message}", source_location: source_location)
       end
 
       def build_tar_archive(template, file_name, resolve_symlinks:)
@@ -256,7 +284,8 @@ module E2B
         files = template.send(:collect_files, file_name)
         output = StringIO.new
 
-        Gem::Package::TarWriter.new(output) do |tar|
+        gzip = Zlib::GzipWriter.new(output)
+        Gem::Package::TarWriter.new(gzip) do |tar|
           files.each do |file|
             relative = Pathname.new(file).relative_path_from(Pathname.new(context_path)).to_s
 
@@ -275,6 +304,7 @@ module E2B
             end
           end
         end
+        gzip.finish
 
         output.rewind
         output.string
@@ -292,10 +322,13 @@ module E2B
         Array(tags).flatten.compact
       end
 
-      def extract_build_identifiers(build_info, template_id:, build_id:)
+      def extract_build_identifiers(build_info, template_id:, build_id:, build_step_origins:)
+        resolved_build_step_origins = build_step_origins
+
         if build_info
           if build_info.respond_to?(:template_id) && build_info.respond_to?(:build_id)
-            return [build_info.template_id, build_info.build_id]
+            resolved_build_step_origins ||= build_info.build_step_origins if build_info.respond_to?(:build_step_origins)
+            return [build_info.template_id, build_info.build_id, Array(resolved_build_step_origins).compact]
           end
 
           if build_info.is_a?(Hash)
@@ -303,14 +336,62 @@ module E2B
               build_info[:templateID] || build_info["templateID"]
             resolved_build_id = build_info[:build_id] || build_info["build_id"] ||
               build_info[:buildID] || build_info["buildID"]
+            resolved_build_step_origins ||= build_info[:build_step_origins] || build_info["build_step_origins"] ||
+              build_info[:buildStepOrigins] || build_info["buildStepOrigins"]
 
-            return [resolved_template_id, resolved_build_id]
+            return [resolved_template_id, resolved_build_id, Array(resolved_build_step_origins).compact]
           end
         end
 
-        return [template_id, build_id] if template_id && build_id
+        return [template_id, build_id, Array(resolved_build_step_origins).compact] if template_id && build_id
 
         raise ArgumentError, "Provide build_info or both template_id: and build_id:"
+      end
+
+      def build_step_source_location(step, build_step_origins)
+        origins = Array(build_step_origins).compact
+        return nil if origins.empty?
+
+        index = case step
+                when BASE_STEP_NAME
+                  0
+                when FINALIZE_STEP_NAME
+                  origins.length - 1
+                else
+                  Integer(step, 10)
+                end
+
+        origins[index] if index && index >= 0 && index < origins.length
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      def build_error(message, step: nil, source_location: nil, status_code: nil, headers: {})
+        BuildError.new(
+          message,
+          step: step,
+          source_location: source_location,
+          status_code: status_code,
+          headers: headers
+        )
+      end
+
+      def file_upload_error(message, source_location: nil, status_code: nil, headers: {})
+        FileUploadError.new(
+          message,
+          source_location: source_location,
+          status_code: status_code,
+          headers: headers
+        )
+      end
+
+      def template_error(message, source_location: nil, status_code: nil, headers: {})
+        TemplateError.new(
+          message,
+          source_location: source_location,
+          status_code: status_code,
+          headers: headers
+        )
       end
 
       def escape_path_segment(value)
@@ -360,6 +441,8 @@ module E2B
       @force = false
       @force_next_layer = false
       @instructions = []
+      @base_source_location = capture_source_location
+      @finalization_source_location = nil
     end
 
     def from_debian_image(variant = "stable")
@@ -397,6 +480,7 @@ module E2B
                            }
                          end
       @force = true if @force_next_layer
+      @base_source_location = capture_source_location
       self
     end
 
@@ -410,6 +494,7 @@ module E2B
         awsRegion: region
       }
       @force = true if @force_next_layer
+      @base_source_location = capture_source_location
       self
     end
 
@@ -421,6 +506,7 @@ module E2B
         serviceAccountJson: read_gcp_service_account_json(service_account_json)
       }
       @force = true if @force_next_layer
+      @base_source_location = capture_source_location
       self
     end
 
@@ -429,7 +515,15 @@ module E2B
       @registry_config = nil
       @base_image = E2B::DockerfileParser.parse(dockerfile_content_or_path, self)
       @force = true if @force_next_layer
+      @base_source_location = capture_source_location
       self
+    rescue TemplateError => e
+      raise template_error(
+        e.message,
+        source_location: capture_source_location,
+        status_code: e.status_code,
+        headers: e.headers
+      )
     end
 
     def from_template(template)
@@ -437,13 +531,16 @@ module E2B
       @base_image = nil
       @registry_config = nil
       @force = true if @force_next_layer
+      @base_source_location = capture_source_location
       self
     end
 
     def copy(src, dest, force_upload: nil, user: nil, mode: nil, resolve_symlinks: nil)
+      source_location = capture_source_location
+
       Array(src).each do |source|
         source_path = source.to_s
-        validate_relative_path!(source_path)
+        validate_relative_path!(source_path, source_location: source_location)
 
         @instructions << {
           type: "COPY",
@@ -455,7 +552,8 @@ module E2B
           ],
           force: !!force_upload || @force_next_layer,
           forceUpload: force_upload,
-          resolveSymlinks: resolve_symlinks
+          resolveSymlinks: resolve_symlinks.nil? ? DEFAULT_RESOLVE_SYMLINKS : resolve_symlinks,
+          sourceLocation: source_location
         }
       end
 
@@ -479,30 +577,38 @@ module E2B
 
     def run_cmd(cmd, user: nil)
       commands = Array(cmd).map(&:to_s)
+      source_location = capture_source_location
 
       @instructions << {
         type: "RUN",
         args: [commands.join(" && "), user || ""],
-        force: @force_next_layer
+        force: @force_next_layer,
+        sourceLocation: source_location
       }
 
       self
     end
 
     def set_workdir(workdir)
+      source_location = capture_source_location
+
       @instructions << {
         type: "WORKDIR",
         args: [workdir.to_s],
-        force: @force_next_layer
+        force: @force_next_layer,
+        sourceLocation: source_location
       }
       self
     end
 
     def set_user(user)
+      source_location = capture_source_location
+
       @instructions << {
         type: "USER",
         args: [user.to_s],
-        force: @force_next_layer
+        force: @force_next_layer,
+        sourceLocation: source_location
       }
       self
     end
@@ -514,11 +620,13 @@ module E2B
         values << key.to_s
         values << value.to_s
       end
+      source_location = capture_source_location
 
       @instructions << {
         type: "ENV",
         args: args,
-        force: @force_next_layer
+        force: @force_next_layer,
+        sourceLocation: source_location
       }
       self
     end
@@ -562,7 +670,12 @@ module E2B
     end
 
     def add_mcp_server(servers)
-      raise BuildError, "MCP servers can only be added to mcp-gateway template" unless @base_template == "mcp-gateway"
+      unless @base_template == "mcp-gateway"
+        raise build_error(
+          "MCP servers can only be added to mcp-gateway template",
+          source_location: capture_source_location
+        )
+      end
 
       server_list = Array(servers).map(&:to_s)
       run_cmd("mcp-gateway pull #{server_list.join(' ')}", user: "root")
@@ -633,11 +746,13 @@ module E2B
     def set_start_cmd(start_cmd, ready_cmd = nil)
       @start_cmd = start_cmd.to_s
       @ready_cmd = normalize_ready_cmd(ready_cmd) unless ready_cmd.nil?
+      @finalization_source_location = capture_source_location
       self
     end
 
     def set_ready_cmd(ready_cmd)
       @ready_cmd = normalize_ready_cmd(ready_cmd)
+      @finalization_source_location = capture_source_location
       self
     end
 
@@ -651,11 +766,13 @@ module E2B
 
     def to_dockerfile
       if @base_template
-        raise TemplateError,
-          "Cannot convert template built from another template to Dockerfile. Templates based on other templates can only be built using the E2B API."
+        raise template_error(
+          "Cannot convert template built from another template to Dockerfile. Templates based on other templates can only be built using the E2B API.",
+          source_location: capture_source_location
+        )
       end
 
-      raise TemplateError, "No base image specified for template" unless @base_image
+      raise template_error("No base image specified for template", source_location: capture_source_location) unless @base_image
 
       dockerfile = +"FROM #{@base_image}\n"
       @instructions.each do |instruction|
@@ -715,7 +832,8 @@ module E2B
         instruction.merge(filesHash: calculate_files_hash(
           src,
           dest,
-          resolve_symlinks: instruction[:resolveSymlinks].nil? ? true : instruction[:resolveSymlinks]
+          resolve_symlinks: instruction[:resolveSymlinks],
+          source_location: instruction[:sourceLocation]
         ))
       end
     end
@@ -731,26 +849,35 @@ module E2B
       step
     end
 
-    def validate_relative_path!(src)
+    def validate_relative_path!(src, source_location:)
       if Pathname.new(src).absolute?
-        raise TemplateError,
-          "Invalid source path \"#{src}\": absolute paths are not allowed. Use a relative path within the context directory."
+        raise template_error(
+          "Invalid source path \"#{src}\": absolute paths are not allowed. Use a relative path within the context directory.",
+          source_location: source_location
+        )
       end
 
       normalized = Pathname.new(src).cleanpath.to_s
       escapes = normalized == ".." || normalized.start_with?("../")
       return unless escapes
 
-      raise TemplateError,
-        "Invalid source path \"#{src}\": path escapes the context directory. The path must stay within the context directory."
+      raise template_error(
+        "Invalid source path \"#{src}\": path escapes the context directory. The path must stay within the context directory.",
+        source_location: source_location
+      )
     end
 
-    def calculate_files_hash(src, dest, resolve_symlinks:)
+    def calculate_files_hash(src, dest, resolve_symlinks:, source_location: nil)
       digest = Digest::SHA256.new
       digest.update("COPY #{src} #{dest}")
       files = collect_files(src)
 
-      raise TemplateError, "No files found in #{File.join(@file_context_path, src)}" if files.empty?
+      if files.empty?
+        raise template_error(
+          "No files found in #{File.join(@file_context_path, src)}",
+          source_location: source_location
+        )
+      end
 
       files.each do |file|
         relative_path = Pathname.new(file).relative_path_from(Pathname.new(@file_context_path)).to_s
@@ -822,6 +949,13 @@ module E2B
       @ignore_patterns ||= (@file_ignore_patterns + read_dockerignore).uniq
     end
 
+    def build_step_origins
+      origins = [@base_source_location]
+      origins.concat(@instructions.map { |instruction| instruction[:sourceLocation] })
+      origins << @finalization_source_location if @finalization_source_location
+      origins.compact
+    end
+
     def read_dockerignore
       dockerignore_path = File.join(@file_context_path, ".dockerignore")
       return [] unless File.exist?(dockerignore_path)
@@ -850,6 +984,38 @@ module E2B
       Dir.pwd
     end
 
+    def capture_source_location
+      location = caller_locations(2, 20).find do |entry|
+        path = entry.absolute_path || entry.path
+        next false unless path
+
+        !path.include?("/lib/e2b/")
+      end
+
+      location&.to_s
+    end
+
+    def build_error(message, step: nil, source_location: nil, status_code: nil, headers: {})
+      self.class.send(
+        :build_error,
+        message,
+        step: step,
+        source_location: source_location,
+        status_code: status_code,
+        headers: headers
+      )
+    end
+
+    def template_error(message, source_location: nil, status_code: nil, headers: {})
+      self.class.send(
+        :template_error,
+        message,
+        source_location: source_location,
+        status_code: status_code,
+        headers: headers
+      )
+    end
+
     def normalize_ready_cmd(ready_cmd)
       return ready_cmd.get_cmd if ready_cmd.respond_to?(:get_cmd)
 
@@ -867,7 +1033,10 @@ module E2B
     def ensure_devcontainer_template!
       return if @base_template == "devcontainer"
 
-      raise BuildError, "Devcontainers can only used in the devcontainer template"
+      raise build_error(
+        "Devcontainers can only used in the devcontainer template",
+        source_location: capture_source_location
+      )
     end
   end
 end
