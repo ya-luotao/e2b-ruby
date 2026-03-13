@@ -534,6 +534,81 @@ RSpec.describe E2B::Template do
     end
   end
 
+  describe "file collection" do
+    it "excludes ignored nested directories and their contents" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "src", "components", "ui"))
+        FileUtils.mkdir_p(File.join(dir, "src", "components", "forms"))
+        FileUtils.mkdir_p(File.join(dir, "src", "utils"))
+        File.write(File.join(dir, "src", "index.ts"), "index")
+        File.write(File.join(dir, "src", "components", "ui", "Button.tsx"), "button")
+        File.write(File.join(dir, "src", "components", "forms", "Input.tsx"), "input")
+        File.write(File.join(dir, "src", "utils", "helper.ts"), "helper")
+
+        template = described_class.new(file_context_path: dir, file_ignore_patterns: ["**/ui/**"])
+
+        expect(template.send(:collect_files, "src").map { |file| file.delete_prefix("#{dir}/") }).to eq([
+          "src",
+          "src/components",
+          "src/components/forms",
+          "src/components/forms/Input.tsx",
+          "src/index.ts",
+          "src/utils",
+          "src/utils/helper.ts"
+        ])
+      end
+    end
+
+    it "respects trailing-slash ignore patterns for directories" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "dist"))
+        File.write(File.join(dir, "dist", "bundle.js"), "bundle")
+        File.write(File.join(dir, "app.js"), "app")
+
+        template = described_class.new(file_context_path: dir, file_ignore_patterns: ["dist/"])
+
+        expect(template.send(:collect_files, "*").map { |file| file.delete_prefix("#{dir}/") }).to eq(["app.js"])
+      end
+    end
+
+    it "matches root-anchored ignore patterns against directory contents" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "dist"))
+        File.write(File.join(dir, "dist", "bundle.js"), "bundle")
+        File.write(File.join(dir, "app.js"), "app")
+
+        template = described_class.new(file_context_path: dir, file_ignore_patterns: ["/dist/**"])
+
+        expect(template.send(:collect_files, "*").map { |file| file.delete_prefix("#{dir}/") }).to eq([
+          "app.js",
+          "dist"
+        ])
+      end
+    end
+
+    it "drops ignored test directories from recursive directory matches" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "src", "components"))
+        FileUtils.mkdir_p(File.join(dir, "src", "tests"))
+        File.write(File.join(dir, "src", "index.ts"), "index")
+        File.write(File.join(dir, "src", "components", "Button.tsx"), "button")
+        File.write(File.join(dir, "src", "tests", "test.spec.ts"), "spec")
+
+        template = described_class.new(
+          file_context_path: dir,
+          file_ignore_patterns: ["**/tests/**", "**/*.spec.*"]
+        )
+
+        expect(template.send(:collect_files, "src").map { |file| file.delete_prefix("#{dir}/") }).to eq([
+          "src",
+          "src/components",
+          "src/components/Button.tsx",
+          "src/index.ts"
+        ])
+      end
+    end
+  end
+
   describe ".build_in_background" do
     it "requests, uploads, and triggers template builds" do
       Dir.mktmpdir do |dir|

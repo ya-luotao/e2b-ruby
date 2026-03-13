@@ -920,15 +920,17 @@ module E2B
 
     def add_match_files(files, match)
       full_path = File.join(@file_context_path, match)
-      return if ignored_path?(match)
+      directory = File.directory?(full_path) && !File.symlink?(full_path)
+      return if ignored_path?(match, directory: directory)
 
-      if File.directory?(full_path) && !File.symlink?(full_path)
+      if directory
         files << full_path
         Dir.glob(File.join(full_path, "**", "*"), File::FNM_DOTMATCH).each do |child|
           next if [".", ".."].include?(File.basename(child))
 
           relative = Pathname.new(child).relative_path_from(Pathname.new(@file_context_path)).to_s
-          next if ignored_path?(relative)
+          child_directory = File.directory?(child) && !File.symlink?(child)
+          next if ignored_path?(relative, directory: child_directory)
 
           files << child
         end
@@ -937,16 +939,61 @@ module E2B
       end
     end
 
-    def ignored_path?(relative_path)
-      normalized = relative_path.tr(File::SEPARATOR, "/")
+    def ignored_path?(relative_path, directory: false)
+      normalized = normalize_ignore_path(relative_path)
       ignore_patterns.any? do |pattern|
-        File.fnmatch?(pattern, normalized, File::FNM_PATHNAME | File::FNM_DOTMATCH) ||
-          File.fnmatch?(File.join(pattern, "**"), normalized, File::FNM_PATHNAME | File::FNM_DOTMATCH)
+        normalized_pattern = normalize_ignore_pattern(pattern)
+        candidates = ignore_path_candidates(normalized, normalized_pattern, directory: directory)
+
+        ignore_pattern_variants(normalized_pattern).any? do |variant|
+          candidates.any? do |candidate|
+            File.fnmatch?(variant, candidate, File::FNM_PATHNAME | File::FNM_DOTMATCH)
+          end
+        end
       end
     end
 
     def ignore_patterns
-      @ignore_patterns ||= (@file_ignore_patterns + read_dockerignore).uniq
+      @ignore_patterns ||= (@file_ignore_patterns + read_dockerignore)
+    end
+
+    def ignore_pattern_variants(normalized)
+      variants = [normalized]
+
+      if normalized.end_with?("/")
+        base = normalized.sub(%r{/+\z}, "")
+        variants << base
+        variants << "#{base}/**"
+      elsif normalized.end_with?("/**")
+        base = normalized.sub(%r{/+\*\*\z}, "")
+        variants << base unless normalized.start_with?("/")
+      elsif !normalized.start_with?("/")
+        variants << "#{normalized}/**"
+      end
+
+      variants.reject(&:empty?).uniq
+    end
+
+    def ignore_path_candidates(normalized_path, normalized_pattern, directory:)
+      candidates = [normalized_path]
+      candidates << "#{normalized_path}/" if directory
+
+      return candidates unless normalized_pattern.start_with?("/")
+
+      candidates << "/#{normalized_path}" unless directory && normalized_pattern.end_with?("/**")
+      candidates << "/#{normalized_path}/" if directory && !normalized_pattern.end_with?("/**")
+      candidates
+    end
+
+    def normalize_ignore_pattern(pattern)
+      normalized = pattern.to_s.tr(File::SEPARATOR, "/").sub(/\A\.\//, "")
+      return "/#{normalized.sub(%r{\A/+}, '')}" if normalized.start_with?("/")
+
+      normalized.sub(%r{\A/+}, "")
+    end
+
+    def normalize_ignore_path(path)
+      path.to_s.tr(File::SEPARATOR, "/").sub(/\A\.\//, "").sub(%r{\A/+}, "")
     end
 
     def build_step_origins
