@@ -166,6 +166,22 @@ module E2B
           timeout: request_timeout || 30)
       end
 
+      # Close the stdin of a running process.
+      #
+      # After calling this, no more input can be sent to the process via
+      # {#send_stdin}.
+      #
+      # @param pid [Integer] Process ID
+      # @param request_timeout [Integer, nil] Request timeout in seconds
+      # @return [void]
+      # @raise [E2B::E2BError] if the process is not found
+      def close_stdin(pid, request_timeout: nil, headers: nil)
+        envd_rpc("process.Process", "CloseStdin",
+          body: { process: { pid: pid } },
+          headers: headers,
+          timeout: request_timeout || 30)
+      end
+
       # Connect to a running process
       #
       # @param pid [Integer] Process ID to connect to
