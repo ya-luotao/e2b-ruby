@@ -182,6 +182,9 @@ module E2B
           return handle_streaming_rpc(path, envelope, timeout, on_event, headers)
         end
 
+        # Unary RPCs: try Connect protocol first, fall back to plain JSON.
+        # Some envd versions (e.g., 0.5.4 on self-hosted) reject
+        # application/connect+json for unary calls but accept application/json.
         handle_rpc_response(service, method) do
           with_retry("RPC #{service}/#{method}") do
             url = URI.parse("#{@base_url.chomp('/')}#{path}")
@@ -195,6 +198,19 @@ module E2B
             request.body = envelope
 
             response = http.request(request)
+
+            # Fall back to plain JSON if Connect protocol is unsupported (HTTP 415)
+            if response.code.to_i == 415
+              log_debug("Connect protocol unsupported for #{service}/#{method}, falling back to plain JSON")
+              request = Net::HTTP::Post.new(url.request_uri)
+              request["Content-Type"] = "application/json"
+              request["X-Access-Token"] = @access_token if @access_token
+              request["Connection"] = "keep-alive"
+              apply_custom_headers(request, headers)
+              request.body = json_body
+
+              response = http.request(request)
+            end
 
             OpenStruct.new(
               status: response.code.to_i,
