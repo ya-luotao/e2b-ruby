@@ -2,6 +2,12 @@
 
 All notable changes to the E2B Ruby SDK will be documented in this file.
 
+## [0.3.1] - 2026-03-20
+
+### Added
+
+- **`Commands#close_stdin`** — close stdin on a running process, mirroring the existing `Pty#close_stdin`. Needed for bidirectional stdin/stdout protocols (e.g., Claude Code's stream-json mode) where the caller must signal end-of-input.
+
 ## [0.3.0] - 2026-03-13
 
 Full parity with the official E2B Python/JS SDKs.
@@ -85,6 +91,7 @@ Initial development version (not published to RubyGems).
 - Faraday-based HTTP client for E2B management API
 - Connect RPC binary envelope parsing
 
+[0.3.1]: https://github.com/ya-luotao/e2b-ruby/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ya-luotao/e2b-ruby/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ya-luotao/e2b-ruby/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ya-luotao/e2b-ruby/releases/tag/v0.1.0

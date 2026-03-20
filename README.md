@@ -132,6 +132,7 @@ sandbox = client.create(template: "base")
 | `list` | List running processes |
 | `kill(pid)` | Kill a process |
 | `send_stdin(pid, data)` | Send stdin to a process |
+| `close_stdin(pid)` | Close stdin (send EOF) |
 | `connect(pid)` | Connect to running process |
 
 ### Filesystem (`sandbox.files`)
