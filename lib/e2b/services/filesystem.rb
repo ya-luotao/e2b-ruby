@@ -109,6 +109,10 @@ module E2B
 
       # Check if a path exists
       #
+      # Only NotFoundError is treated as "does not exist". Other errors
+      # (auth, network, server) propagate so callers can distinguish
+      # "file is gone" from "we couldn't ask".
+      #
       # @param path [String] Path to check
       # @param user [String] Username context
       # @param request_timeout [Integer] Request timeout in seconds
@@ -116,7 +120,7 @@ module E2B
       def exists?(path, user: nil, request_timeout: 30)
         get_info(path, user: user, request_timeout: request_timeout)
         true
-      rescue E2B::NotFoundError, E2B::E2BError
+      rescue E2B::NotFoundError
         false
       end
 

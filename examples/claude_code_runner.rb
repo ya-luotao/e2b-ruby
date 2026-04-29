@@ -125,15 +125,15 @@ puts "\n" + "-" * 50
 
 # Check what Claude created
 puts "\nFiles in project directory:"
-files = sandbox.filesystem.list("/home/user/project")
+files = sandbox.files.list("/home/user/project")
 files.each do |file|
-  puts "  #{file[:name]}"
+  puts "  #{file.name}"
 end
 
 # Read the created file if it exists
-if files.any? { |f| f[:name] == "hello.py" }
+if files.any? { |f| f.name == "hello.py" }
   puts "\nContents of hello.py:"
-  content = sandbox.filesystem.read("/home/user/project/hello.py")
+  content = sandbox.files.read("/home/user/project/hello.py")
   puts content
 
   puts "\nRunning hello.py:"

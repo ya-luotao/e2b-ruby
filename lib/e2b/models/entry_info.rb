@@ -216,7 +216,7 @@ module E2B
         elsif value.is_a?(Time)
           value
         end
-      rescue ArgumentError
+      rescue ArgumentError, TypeError
         nil
       end
 

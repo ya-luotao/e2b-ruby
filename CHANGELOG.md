@@ -2,6 +2,30 @@
 
 All notable changes to the E2B Ruby SDK will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **`parse_exit_code` silently mapping non-zero statuses to 0** — `EnvdHttpClient#parse_exit_code` previously returned `0` for any unparseable status string containing the digit `"0"`, causing commands that failed with messages like `"code: 100"` to look successful and skip raising `CommandExitError`. Fallback now always returns `1`.
+- **`Sandbox#process_sandbox_data` clobbering attributes** — partial API responses that omit `alias`, `clientID`, `cpuCount`, `memoryMB`, `metadata`, `startedAt`, or `endAt` no longer overwrite previously-known values with `nil`.
+- **`parse_time` crashing on non-string timestamps** — `Sandbox#parse_time` and the `parse_time`/`parse_modified_time` helpers in `Models::SandboxInfo`, `Models::TemplateLogEntry`, and `Models::EntryInfo` now also rescue `TypeError`, surviving malformed numeric or hash values.
+- **`Filesystem#exists?` swallowing all `E2BError` subclasses** — only `NotFoundError` is treated as "does not exist"; auth and network errors now propagate.
+- **Streaming RPC retries replaying side-effecting requests** — `EnvdHttpClient#handle_streaming_rpc` no longer retries through `with_retry` once any event has been delivered to the caller. Previously, a mid-stream connection drop on `process.Process/Start` could spawn a second process and replay output to the user's `on_stdout` callback.
+- **Encoding fix in `create_connect_envelope`** is now covered by tests (UTF-8 multibyte, large bodies).
+- **Plain-JSON fallback when Connect protocol returns 415** is now exercised by tests.
+- **`examples/claude_code_runner.rb`** — replaced calls to non-existent `sandbox.filesystem` accessor with `sandbox.files`, and `entry[:name]` hash access with the `EntryInfo#name` accessor.
+
+### Changed
+
+- **`Sandbox#connect` (instance method) is deprecated** — emits a deprecation warning and points users to `#resume`. The class method `Sandbox.connect(id, ...)` is unchanged. The instance method only resumed the current sandbox, but its name collided with the class method's "connect to a sandbox by ID" semantics.
+- **`Sandbox.list` YARD return type** corrected from `Array<Hash>` to `SandboxPaginator`.
+- **`Sandbox.kill` and `Sandbox#kill` idempotency** is now documented in YARD; behavior is unchanged (returns `true` whether the sandbox was running or already gone).
+
+### Internal
+
+- Replaced per-RPC `OpenStruct` allocation in the unary RPC code path with a `Struct` (`EnvdHttpClient::RpcResponse`). Drops the `ostruct` gemspec dependency and reduces allocation cost.
+- Added `spec/e2b/services/envd_http_client_spec.rb` with 13 tests covering `parse_exit_code`, `decode_base64`, `create_connect_envelope` (including the recent Encoding fix), and `parse_connect_stream`.
+
 ## [0.3.1] - 2026-03-20
 
 ### Added
