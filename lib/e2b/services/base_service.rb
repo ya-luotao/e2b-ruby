@@ -105,7 +105,13 @@ module E2B
       private
 
       def build_envd_client
-        envd_url = "https://#{ENVD_PORT}-#{@sandbox_id}.#{@sandbox_domain}"
+        # Ensure envd traffic bypasses HTTP proxy — the proxy often can't
+        # CONNECT-tunnel to sandbox subdomains. Append the sandbox domain
+        # to no_proxy so Net::HTTP and Faraday connect directly.
+        ensure_no_proxy_for_domain!(@sandbox_domain)
+
+        scheme = ENV.fetch("E2B_ENVD_SCHEME", "https")
+        envd_url = "#{scheme}://#{ENVD_PORT}-#{@sandbox_id}.#{@sandbox_domain}"
 
         EnvdHttpClient.new(
           base_url: envd_url,
@@ -114,6 +120,19 @@ module E2B
           sandbox_id: @sandbox_id,
           logger: @logger
         )
+      end
+
+      # Append domain to no_proxy/NO_PROXY env vars at runtime so that
+      # both Net::HTTP and Faraday bypass the HTTP proxy for envd traffic.
+      def ensure_no_proxy_for_domain!(domain)
+        return if domain.nil? || domain.empty?
+
+        %w[no_proxy NO_PROXY].each do |var|
+          current = ENV[var].to_s
+          next if current.split(",").any? { |h| h.strip == domain }
+
+          ENV[var] = current.empty? ? domain : "#{current},#{domain}"
+        end
       end
     end
 
@@ -222,97 +241,110 @@ module E2B
         end
       end
 
-      # Streaming RPC with chunked response processing
+      # Streaming RPC with chunked response processing.
+      # Uses Faraday for the HTTP connection (same as non-streaming RPCs) to
+      # inherit proxy configuration and SSL settings. The streaming is handled
+      # via Faraday's on_data callback for chunked response processing.
       def handle_streaming_rpc(path, envelope, timeout, on_event, headers)
         result = { events: [], stdout: "", stderr: "", exit_code: nil }
         buffer = "".b
 
-        url = URI.parse("#{@base_url.chomp('/')}#{path}")
+        full_path = normalize_path(path)
 
         with_retry("Streaming RPC #{path}") do
-          http = build_http(url, timeout)
+          ssl_verify = ENV.fetch("E2B_SSL_VERIFY", "true").downcase != "false"
 
-          request = Net::HTTP::Post.new(url.request_uri)
-          request["Content-Type"] = "application/connect+json"
-          request["X-Access-Token"] = @access_token if @access_token
-          request["Connection"] = "keep-alive"
-          apply_custom_headers(request, headers)
-          request.body = envelope
+          streaming_conn = Faraday.new(url: @base_url, ssl: { verify: ssl_verify }) do |conn|
+            conn.options.timeout = timeout
+            conn.options.open_timeout = 30
+            conn.adapter Faraday.default_adapter
+          end
 
-          http.start do |conn|
-            conn.request(request) do |response|
-              unless response.code.to_i.between?(200, 299)
-                body = response.body
-                handle_error(OpenStruct.new(status: response.code.to_i, success?: false, body: body, headers: response.to_hash))
-              end
+          req_headers = {
+            "Content-Type" => "application/connect+json",
+            "Connection" => "keep-alive",
+            "E2b-Sandbox-Id" => @sandbox_id,
+            "E2b-Sandbox-Port" => "#{BaseService::ENVD_PORT}",
+            "X-API-Key" => @api_key
+          }
+          req_headers["X-Access-Token"] = @access_token if @access_token
+          if headers
+            headers.each { |k, v| req_headers[k.to_s] = v.to_s if v }
+          end
 
-              response.read_body do |chunk|
-                next if chunk.nil? || chunk.empty?
-                buffer << chunk
+          response = streaming_conn.post(full_path) do |req|
+            req.headers.merge!(req_headers)
+            req.body = envelope
+            req.options.on_data = proc do |chunk, _overall_size, _env|
+              next if chunk.nil? || chunk.empty?
+              buffer << chunk
 
-                while buffer.bytesize >= 5
-                  flags = buffer.getbyte(0)
-                  length = buffer.byteslice(1, 4).unpack1("N")
+              while buffer.bytesize >= 5
+                flags = buffer.getbyte(0)
+                length = buffer.byteslice(1, 4).unpack1("N")
 
-                  break if length.nil? || buffer.bytesize < 5 + length
+                break if length.nil? || buffer.bytesize < 5 + length
 
-                  message_bytes = buffer.byteslice(5, length)
-                  buffer = buffer.byteslice(5 + length..-1) || "".b
+                message_bytes = buffer.byteslice(5, length)
+                buffer = buffer.byteslice(5 + length..-1) || "".b
 
-                  next if message_bytes.nil? || message_bytes.empty?
+                next if message_bytes.nil? || message_bytes.empty?
 
-                  message_str = message_bytes.force_encoding("UTF-8")
+                message_str = message_bytes.force_encoding("UTF-8")
 
-                  begin
-                    msg = JSON.parse(message_str)
-                    msg = msg["result"] if msg["result"]
+                begin
+                  msg = JSON.parse(message_str)
+                  msg = msg["result"] if msg["result"]
 
-                    result[:events] << msg
+                  result[:events] << msg
 
-                    stdout_data = nil
-                    stderr_data = nil
+                  stdout_data = nil
+                  stderr_data = nil
 
-                    if msg["event"]
-                      event = msg["event"]
+                  if msg["event"]
+                    event = msg["event"]
 
-                      data_event = event["Data"] || event["data"]
-                      if data_event
-                        stdout_data = decode_base64(data_event["stdout"]) if data_event["stdout"]
-                        stderr_data = decode_base64(data_event["stderr"]) if data_event["stderr"]
-                        result[:stdout] += stdout_data if stdout_data
-                        result[:stderr] += stderr_data if stderr_data
-                      end
-
-                      end_event = event["End"] || event["end"]
-                      if end_event
-                        result[:exit_code] = parse_exit_code(end_event["exitCode"] || end_event["exit_code"] || end_event["status"])
-                      end
+                    data_event = event["Data"] || event["data"]
+                    if data_event
+                      stdout_data = decode_base64(data_event["stdout"]) if data_event["stdout"]
+                      stderr_data = decode_base64(data_event["stderr"]) if data_event["stderr"]
+                      result[:stdout] += stdout_data if stdout_data
+                      result[:stderr] += stderr_data if stderr_data
                     end
 
-                    if msg["stdout"]
-                      stdout_data = decode_base64(msg["stdout"])
-                      result[:stdout] += stdout_data
+                    end_event = event["End"] || event["end"]
+                    if end_event
+                      result[:exit_code] = parse_exit_code(end_event["exitCode"] || end_event["exit_code"] || end_event["status"])
                     end
-                    if msg["stderr"]
-                      stderr_data = decode_base64(msg["stderr"])
-                      result[:stderr] += stderr_data
-                    end
-                    if msg["exitCode"] || msg["exit_code"]
-                      result[:exit_code] = parse_exit_code(msg["exitCode"] || msg["exit_code"])
-                    end
-
-                    on_event.call(
-                      stdout: stdout_data,
-                      stderr: stderr_data,
-                      exit_code: result[:exit_code],
-                      event: msg
-                    )
-                  rescue JSON::ParserError
-                    # Skip unparseable messages
                   end
+
+                  if msg["stdout"]
+                    stdout_data = decode_base64(msg["stdout"])
+                    result[:stdout] += stdout_data
+                  end
+                  if msg["stderr"]
+                    stderr_data = decode_base64(msg["stderr"])
+                    result[:stderr] += stderr_data
+                  end
+                  if msg["exitCode"] || msg["exit_code"]
+                    result[:exit_code] = parse_exit_code(msg["exitCode"] || msg["exit_code"])
+                  end
+
+                  on_event.call(
+                    stdout: stdout_data,
+                    stderr: stderr_data,
+                    exit_code: result[:exit_code],
+                    event: msg
+                  )
+                rescue JSON::ParserError
+                  # Skip unparseable messages
                 end
               end
             end
+          end
+
+          unless response.status.between?(200, 299)
+            handle_error(response)
           end
         end
 
@@ -344,16 +376,42 @@ module E2B
       end
 
       def build_http(url, timeout)
-        http = Net::HTTP.new(url.host, url.port)
-        http.use_ssl = true
+        # Respect HTTP proxy env vars (http_proxy, https_proxy, no_proxy) —
+        # Faraday handles this automatically for non-streaming RPCs, but
+        # Net::HTTP requires explicit proxy configuration.
+        proxy = resolve_proxy(url)
+        http = if proxy
+                 Net::HTTP.new(url.host, url.port, proxy.host, proxy.port, proxy.user, proxy.password)
+               else
+                 Net::HTTP.new(url.host, url.port)
+               end
+
+        http.use_ssl = (url.scheme == "https")
         http.open_timeout = 30
         http.read_timeout = timeout
         http.keep_alive_timeout = 30
 
-        ssl_verify = ENV.fetch("E2B_SSL_VERIFY", "true").downcase != "false"
-        http.verify_mode = ssl_verify ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE
+        if http.use_ssl?
+          ssl_verify = ENV.fetch("E2B_SSL_VERIFY", "true").downcase != "false"
+          http.verify_mode = ssl_verify ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE
+        end
 
         http
+      end
+
+      def resolve_proxy(url)
+        no_proxy = ENV["no_proxy"] || ENV["NO_PROXY"]
+        if no_proxy
+          no_proxy_hosts = no_proxy.split(",").map(&:strip)
+          return nil if no_proxy_hosts.any? { |h| url.host.end_with?(h) || h == "*" }
+        end
+
+        proxy_env = url.scheme == "https" ? (ENV["https_proxy"] || ENV["HTTPS_PROXY"]) : (ENV["http_proxy"] || ENV["HTTP_PROXY"])
+        return nil unless proxy_env
+
+        URI.parse(proxy_env)
+      rescue URI::InvalidURIError
+        nil
       end
 
       def with_retry(operation, max_retries: 3)
@@ -483,7 +541,11 @@ module E2B
       def create_connect_envelope(json_message)
         flags = "\x00".b
         length = [json_message.bytesize].pack("N")
-        flags + length + json_message
+        # Force binary encoding on the payload so concatenation with the binary
+        # frame header (flags + length) doesn't raise Encoding::CompatibilityError
+        # when the packed length contains bytes >= 0x80 (json_message.bytesize >= 32768)
+        # or json_message itself has multibyte UTF-8 characters.
+        flags + length + json_message.b
       end
 
       def parse_exit_code(value)
