@@ -2,7 +2,7 @@
 
 All notable changes to the E2B Ruby SDK will be documented in this file.
 
-## [Unreleased]
+## [0.3.2] - 2026-04-30
 
 ### Fixed
 
