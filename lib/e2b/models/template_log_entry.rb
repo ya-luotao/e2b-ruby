@@ -29,8 +29,8 @@ module E2B
         return nil if value.nil?
         return value if value.is_a?(Time)
 
-        Time.parse(value)
-      rescue ArgumentError
+        Time.parse(value.to_s)
+      rescue ArgumentError, TypeError
         nil
       end
 

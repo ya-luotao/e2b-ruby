@@ -3,7 +3,6 @@
 require "base64"
 require "net/http"
 require "openssl"
-require "ostruct"
 require "rubygems/version"
 
 module E2B
@@ -144,6 +143,12 @@ module E2B
     class EnvdHttpClient
       DEFAULT_TIMEOUT = 120
 
+      RpcResponse = Struct.new(:status, :body, :headers, keyword_init: true) do
+        def success?
+          status >= 200 && status < 300
+        end
+      end
+
       def initialize(base_url:, api_key:, access_token: nil, sandbox_id:, logger: nil)
         @base_url = base_url.end_with?("/") ? base_url : "#{base_url}/"
         @api_key = api_key
@@ -231,9 +236,8 @@ module E2B
               response = http.request(request)
             end
 
-            OpenStruct.new(
+            RpcResponse.new(
               status: response.code.to_i,
-              success?: response.code.to_i >= 200 && response.code.to_i < 300,
               body: response.body,
               headers: response.to_hash
             )
@@ -245,13 +249,18 @@ module E2B
       # Uses Faraday for the HTTP connection (same as non-streaming RPCs) to
       # inherit proxy configuration and SSL settings. The streaming is handled
       # via Faraday's on_data callback for chunked response processing.
+      #
+      # Streaming RPCs are NOT idempotent (e.g. process.Process/Start spawns a
+      # process), so we only retry while no events have been emitted to the
+      # caller yet. Once any byte has been delivered via on_event, a retry
+      # would replay output AND start a second process server-side.
       def handle_streaming_rpc(path, envelope, timeout, on_event, headers)
         result = { events: [], stdout: "", stderr: "", exit_code: nil }
         buffer = "".b
 
         full_path = normalize_path(path)
 
-        with_retry("Streaming RPC #{path}") do
+        with_retry("Streaming RPC #{path}", abort_if: -> { result[:events].any? }) do
           ssl_verify = ENV.fetch("E2B_SSL_VERIFY", "true").downcase != "false"
 
           streaming_conn = Faraday.new(url: @base_url, ssl: { verify: ssl_verify }) do |conn|
@@ -414,12 +423,17 @@ module E2B
         nil
       end
 
-      def with_retry(operation, max_retries: 3)
+      def with_retry(operation, max_retries: 3, abort_if: nil)
         retry_count = 0
 
         begin
           yield
         rescue OpenSSL::SSL::SSLError, Errno::ECONNRESET, EOFError, Net::OpenTimeout, Net::ReadTimeout => e
+          if abort_if && abort_if.call
+            log_debug("#{operation}: not retrying (#{e.class}); request had observable side effects")
+            raise E2B::E2BError, "#{operation} failed after partial response: #{e.message}"
+          end
+
           retry_count += 1
 
           if retry_count <= max_retries
@@ -558,7 +572,7 @@ module E2B
         elsif str =~ /^(\d+)$/
           $1.to_i
         else
-          str.include?("0") ? 0 : 1
+          1
         end
       end
 

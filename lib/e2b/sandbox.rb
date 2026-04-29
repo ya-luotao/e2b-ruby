@@ -177,11 +177,15 @@ module E2B
 
       # List running sandboxes
       #
+      # Returns a paginator that yields sandbox info hashes one page at a time.
+      # Use {SandboxPaginator#has_next?} and {SandboxPaginator#next_items} to
+      # iterate through pages.
+      #
       # @param query [Hash, nil] Filter parameters (metadata, state)
       # @param limit [Integer] Maximum results per page
       # @param next_token [String, nil] Pagination token
       # @param api_key [String, nil] API key
-      # @return [Array<Hash>] List of sandbox info hashes
+      # @return [SandboxPaginator]
       def list(query: nil, limit: 100, next_token: nil, api_key: nil, access_token: nil, domain: nil)
         credentials = resolve_credentials(api_key: api_key, access_token: access_token)
         http_client = build_http_client(**credentials, domain: resolve_domain(domain))
@@ -225,10 +229,15 @@ module E2B
         false
       end
 
-      # Kill a sandbox by ID
+      # Kill a sandbox by ID (idempotent)
+      #
+      # Returns `true` if the sandbox was killed, *and* if it was already gone
+      # (NotFound). To distinguish "actually killed" from "already gone", use
+      # {.list} or {Sandbox#running?} before calling.
       #
       # @param sandbox_id [String] Sandbox ID to kill
       # @param api_key [String, nil] API key
+      # @return [Boolean] always true
       def kill(sandbox_id, api_key: nil, access_token: nil, domain: nil)
         credentials = resolve_credentials(api_key: api_key, access_token: access_token)
         http_client = build_http_client(**credentials, domain: resolve_domain(domain))
@@ -294,9 +303,16 @@ module E2B
       @end_at = Time.now + timeout
     end
 
-    # Kill/terminate the sandbox
+    # Kill/terminate the sandbox (idempotent)
+    #
+    # Returns `true` whether the sandbox was running or already gone.
+    #
+    # @return [Boolean] always true
     def kill
       @http_client.delete("/sandboxes/#{@sandbox_id}")
+      true
+    rescue E2B::NotFoundError
+      true
     end
 
     # Pause the sandbox (saves state for later resume)
@@ -305,10 +321,16 @@ module E2B
       @state = "paused"
     end
 
-    # Resume a paused sandbox
+    # @deprecated Use {#resume} instead. The instance-level `#connect`
+    #   collides in name with the class-level {Sandbox.connect}, which has
+    #   different semantics (it builds a new Sandbox instance from a
+    #   sandbox_id). The instance method only resumes the current sandbox.
     #
     # @param timeout [Integer, nil] New timeout in seconds
     def connect(timeout: nil)
+      warn "[DEPRECATION] Sandbox#connect is deprecated; use Sandbox#resume " \
+           "instead. (Sandbox.connect class method is unchanged.) " \
+           "Called from #{caller(1, 1).first}"
       resume(timeout: timeout)
       self
     end
@@ -456,11 +478,13 @@ module E2B
 
       @sandbox_id = data["sandboxID"] || data["sandbox_id"] || data[:sandboxID] || @sandbox_id
       @template_id = data["templateID"] || data["template_id"] || data[:templateID] || @template_id
-      @alias_name = data["alias"] || data[:alias]
-      @client_id = data["clientID"] || data["client_id"] || data[:clientID]
-      @cpu_count = data["cpuCount"] || data["cpu_count"] || data[:cpuCount]
-      @memory_mb = data["memoryMB"] || data["memory_mb"] || data[:memoryMB]
-      @metadata = data["metadata"] || data[:metadata] || {}
+      @alias_name = data["alias"] || data[:alias] || @alias_name
+      @client_id = data["clientID"] || data["client_id"] || data[:clientID] || @client_id
+      @cpu_count = data["cpuCount"] || data["cpu_count"] || data[:cpuCount] || @cpu_count
+      @memory_mb = data["memoryMB"] || data["memory_mb"] || data[:memoryMB] || @memory_mb
+      metadata = data["metadata"] || data[:metadata]
+      @metadata = metadata if metadata
+      @metadata ||= {}
       @state = data["state"] || data[:state] || @state
       @domain = data["domain"] || data[:domain] || @domain
 
@@ -468,8 +492,10 @@ module E2B
       @envd_access_token = data["envdAccessToken"] || data["envd_access_token"] || data[:envdAccessToken] || @envd_access_token
       @traffic_access_token = data["trafficAccessToken"] || data["traffic_access_token"] || data[:trafficAccessToken] || @traffic_access_token
 
-      @started_at = parse_time(data["startedAt"] || data["started_at"] || data[:startedAt])
-      @end_at = parse_time(data["endAt"] || data["end_at"] || data[:endAt])
+      started_at = parse_time(data["startedAt"] || data["started_at"] || data[:startedAt])
+      @started_at = started_at if started_at
+      end_at = parse_time(data["endAt"] || data["end_at"] || data[:endAt])
+      @end_at = end_at if end_at
     end
 
     def initialize_services
@@ -494,8 +520,8 @@ module E2B
       return nil if value.nil?
       return value if value.is_a?(Time)
 
-      Time.parse(value)
-    rescue ArgumentError
+      Time.parse(value.to_s)
+    rescue ArgumentError, TypeError
       nil
     end
 
