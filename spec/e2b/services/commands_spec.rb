@@ -45,7 +45,8 @@ RSpec.describe E2B::Services::Commands do
               args: ["-l", "-c", "echo hi"],
               envs: { "RUBYOPT" => "warn" },
               cwd: "/workspace"
-            }
+            },
+            stdin: false
           },
           timeout: 90,
           headers: auth_headers,
@@ -68,7 +69,7 @@ RSpec.describe E2B::Services::Commands do
     it "streams stdout and stderr chunks to callbacks and blocks" do
       streamed = []
       allow(commands).to receive(:envd_rpc) do |_service, _method, body:, timeout:, headers:, on_event:|
-        expect(body).to eq(process: { cmd: "/bin/bash", args: ["-l", "-c", "run me"] })
+        expect(body).to eq(process: { cmd: "/bin/bash", args: ["-l", "-c", "run me"] }, stdin: false)
         expect(timeout).to eq(31)
         expect(headers).to be_nil
 
@@ -117,7 +118,7 @@ RSpec.describe E2B::Services::Commands do
 
       allow(commands).to receive(:envd_rpc) do |_service, method, body:, timeout:, headers:, on_event:|
         expect(method).to eq("Start")
-        expect(body).to eq(process: { cmd: "/bin/bash", args: ["-l", "-c", "sleep 30"] })
+        expect(body).to eq(process: { cmd: "/bin/bash", args: ["-l", "-c", "sleep 30"] }, stdin: false)
         expect(timeout).to eq(90)
         expect(headers).to eq(auth_headers)
 
@@ -227,7 +228,8 @@ RSpec.describe E2B::Services::Commands do
             process: {
               cmd: "/bin/bash",
               args: ["-l", "-c", "echo hi"]
-            }
+            },
+            stdin: false
           },
           timeout: 90,
           headers: { "Authorization" => "Basic #{Base64.strict_encode64("user:")}" },

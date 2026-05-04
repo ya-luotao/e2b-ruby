@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "base64"
+require_relative "envd_base64"
 
 module E2B
   module Services
@@ -360,8 +360,8 @@ module E2B
         process_event(event) { |stdout_chunk, stderr_chunk, pty_chunk| yield stdout_chunk, stderr_chunk, pty_chunk } if event.is_a?(Hash)
 
         if event.nil?
-          stdout_chunk = decode_base64(message["stdout"])
-          stderr_chunk = decode_base64(message["stderr"])
+          stdout_chunk = EnvdBase64.decode_process_output(message["stdout"])
+          stderr_chunk = EnvdBase64.decode_process_output(message["stderr"])
 
           if stdout_chunk && !stdout_chunk.empty?
             append_stdout(stdout_chunk)
@@ -387,9 +387,9 @@ module E2B
         # Handle Data event
         data_event = event["Data"] || event["data"]
         if data_event
-          stdout_chunk = decode_base64(data_event["stdout"])
-          stderr_chunk = decode_base64(data_event["stderr"])
-          pty_chunk = decode_base64(data_event["pty"])
+          stdout_chunk = EnvdBase64.decode_process_output(data_event["stdout"])
+          stderr_chunk = EnvdBase64.decode_process_output(data_event["stderr"])
+          pty_chunk = EnvdBase64.decode_process_output(data_event["pty"])
 
           if stdout_chunk && !stdout_chunk.empty?
             append_stdout(stdout_chunk)
@@ -465,18 +465,6 @@ module E2B
         end
 
         nil
-      end
-
-      # Decode a base64-encoded string.
-      #
-      # @param data [String, nil] Base64-encoded data
-      # @return [String, nil] Decoded string, or nil if input is nil/empty
-      def decode_base64(data)
-        return nil if data.nil? || data.empty?
-
-        Base64.decode64(data).force_encoding("UTF-8")
-      rescue StandardError
-        data.to_s
       end
 
       # Parse an exit code from various envd response formats.
