@@ -1,5 +1,7 @@
 # E2B Ruby SDK
 
+[![Gem Version](https://badge.fury.io/rb/e2b.svg)](https://badge.fury.io/rb/e2b)
+
 Ruby SDK for [E2B](https://e2b.dev) - secure cloud sandboxes for AI-generated code execution.
 
 Aligned with the [official E2B SDKs](https://github.com/e2b-dev/E2B) (Python/JS).
