@@ -2,6 +2,23 @@
 
 All notable changes to the E2B Ruby SDK will be documented in this file.
 
+## [0.3.4] - 2026-05-05
+
+### Added
+
+- **`stdin:` keyword on `Commands#run`** — opt in to a stdin pipe for the spawned process. Default `false` mirrors TS/Python SDKs. Required when the caller plans to use `handle.send_stdin(...)` after `commands.run(background: true)`.
+
+### Fixed
+
+- **`Commands#run` now sends `stdin: false` by default in the Connect StartRequest**, aligning with TS/Python SDKs. Fixes hangs (e.g. `opencode run`) where envd waited for stdin to close on processes the caller never intended to write to. (#5)
+- **`EnvdHttpClient` base64 decoding no longer returns `ASCII-8BIT` bytes** — the streaming and unary RPC paths both go through `Services::EnvdBase64.decode_process_output`, which forces UTF-8 and `scrub`s invalid byte sequences. Previously, base64 chunks accumulated via `result[:stdout] += ...` could raise `Encoding::CompatibilityError` when stdout contained multibyte characters. (#5)
+- **`Pty#create` now also sends `stdin: false`** in the Connect StartRequest. PTY input continues to flow through the dedicated PTY channel.
+- **`Models::ProcessResult.decode_base64_safe`** delegates to `Services::EnvdBase64.decode_process_output`, picking up the same UTF-8 + scrub treatment.
+
+### Internal
+
+- New `Services::EnvdBase64` module centralises base64-of-process-output decoding for `EnvdHttpClient`, `CommandHandle`, and `Models::ProcessResult`. Removes a third near-duplicate copy of the decoding logic and the `EnvdHttpClient#decode_base64` shim.
+
 ## [0.3.3] - 2026-05-05
 
 ### Added
