@@ -36,11 +36,15 @@ module E2B
       # @param on_stderr [Proc, nil] Callback for stderr data
       # @param timeout [Integer] Command timeout in seconds (default: 60)
       # @param request_timeout [Integer, nil] HTTP request timeout in seconds
+      # @param stdin [Boolean] Allocate a stdin pipe for the process. Required
+      #   when the caller plans to use {#send_stdin} or {CommandHandle#send_stdin}
+      #   on a background handle. Defaults to +false+ to mirror TS/Python SDKs.
       # @return [CommandResult, CommandHandle] Result or handle for background commands
       #
       # @raise [CommandExitError] If exit code is non-zero (foreground only)
       def run(cmd, background: false, envs: nil, user: nil, cwd: nil,
-              on_stdout: nil, on_stderr: nil, timeout: 60, request_timeout: nil, &block)
+              on_stdout: nil, on_stderr: nil, timeout: 60, request_timeout: nil,
+              stdin: false, &block)
         # Build the process spec - official SDK always uses /bin/bash -l -c
         process_spec = {
           cmd: "/bin/bash",
@@ -55,7 +59,7 @@ module E2B
 
         process_spec[:cwd] = cwd if cwd
 
-        body = { process: process_spec, stdin: false }
+        body = { process: process_spec, stdin: stdin }
         headers = user_auth_headers(user)
 
         # Set up streaming callback
@@ -150,7 +154,11 @@ module E2B
         false
       end
 
-      # Send stdin data to a running process
+      # Send stdin data to a running process.
+      #
+      # The target process must have been started with +stdin: true+ (see {#run})
+      # — otherwise envd silently drops the input and the call is a no-op on the
+      # process side.
       #
       # @param pid [Integer] Process ID
       # @param data [String] Data to send to stdin

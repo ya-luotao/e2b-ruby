@@ -66,6 +66,18 @@ RSpec.describe E2B::Services::Commands do
       expect(result).to be_success
     end
 
+    it "forwards stdin: true into the StartRequest body when the caller opts in" do
+      forwarded_body = nil
+      allow(commands).to receive(:envd_rpc) do |_service, _method, body:, **|
+        forwarded_body = body
+        { stdout: "", stderr: "", exit_code: 0, events: [{ "event" => { "End" => { "exitCode" => 0 } } }] }
+      end
+
+      commands.run("read x; echo $x", stdin: true)
+
+      expect(forwarded_body[:stdin]).to be(true)
+    end
+
     it "streams stdout and stderr chunks to callbacks and blocks" do
       streamed = []
       allow(commands).to receive(:envd_rpc) do |_service, _method, body:, timeout:, headers:, on_event:|

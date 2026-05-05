@@ -56,7 +56,8 @@ RSpec.describe E2B::Services::Pty do
               cols: 120,
               rows: 40
             }
-          }
+          },
+          stdin: false
         )
         expect(timeout).to eq(35)
         expect(headers).to eq(auth_headers)

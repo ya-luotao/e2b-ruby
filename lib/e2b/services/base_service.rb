@@ -316,8 +316,8 @@ module E2B
 
                     data_event = event["Data"] || event["data"]
                     if data_event
-                      stdout_data = decode_base64(data_event["stdout"]) if data_event["stdout"]
-                      stderr_data = decode_base64(data_event["stderr"]) if data_event["stderr"]
+                      stdout_data = EnvdBase64.decode_process_output(data_event["stdout"]) if data_event["stdout"]
+                      stderr_data = EnvdBase64.decode_process_output(data_event["stderr"]) if data_event["stderr"]
                       result[:stdout] += stdout_data if stdout_data
                       result[:stderr] += stderr_data if stderr_data
                     end
@@ -329,11 +329,11 @@ module E2B
                   end
 
                   if msg["stdout"]
-                    stdout_data = decode_base64(msg["stdout"])
+                    stdout_data = EnvdBase64.decode_process_output(msg["stdout"])
                     result[:stdout] += stdout_data
                   end
                   if msg["stderr"]
-                    stderr_data = decode_base64(msg["stderr"])
+                    stderr_data = EnvdBase64.decode_process_output(msg["stderr"])
                     result[:stderr] += stderr_data
                   end
                   if msg["exitCode"] || msg["exit_code"]
@@ -496,8 +496,8 @@ module E2B
 
               data_event = event["Data"] || event["data"]
               if data_event
-                result[:stdout] += decode_base64(data_event["stdout"]) if data_event["stdout"]
-                result[:stderr] += decode_base64(data_event["stderr"]) if data_event["stderr"]
+                result[:stdout] += EnvdBase64.decode_process_output(data_event["stdout"]) if data_event["stdout"]
+                result[:stderr] += EnvdBase64.decode_process_output(data_event["stderr"]) if data_event["stderr"]
               end
 
               end_event = event["End"] || event["end"]
@@ -507,8 +507,8 @@ module E2B
               end
             end
 
-            result[:stdout] += decode_base64(msg["stdout"]) if msg["stdout"]
-            result[:stderr] += decode_base64(msg["stderr"]) if msg["stderr"]
+            result[:stdout] += EnvdBase64.decode_process_output(msg["stdout"]) if msg["stdout"]
+            result[:stderr] += EnvdBase64.decode_process_output(msg["stderr"]) if msg["stderr"]
             if msg["exitCode"] || msg["exit_code"]
               result[:exit_code] = parse_exit_code(msg["exitCode"] || msg["exit_code"])
             end
@@ -575,10 +575,6 @@ module E2B
         else
           1
         end
-      end
-
-      def decode_base64(data)
-        EnvdBase64.decode_process_output(data)
       end
 
       def handle_error(response)

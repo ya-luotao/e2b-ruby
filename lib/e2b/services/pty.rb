@@ -98,7 +98,8 @@ module E2B
           process: process_spec,
           pty: {
             size: size.to_h
-          }
+          },
+          stdin: false
         }
 
         build_live_handle(

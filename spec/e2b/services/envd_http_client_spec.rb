@@ -43,13 +43,6 @@ RSpec.describe E2B::Services::EnvdHttpClient do
     end
   end
 
-  describe "#decode_base64" do
-    it "delegates to EnvdBase64.decode_process_output" do
-      encoded = Base64.strict_encode64("hello")
-      expect(client.send(:decode_base64, encoded)).to eq(E2B::Services::EnvdBase64.decode_process_output(encoded))
-    end
-  end
-
   describe "#create_connect_envelope" do
     it "produces a binary frame with flags=0, big-endian length, and the JSON body" do
       json = '{"hello":"world"}'

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "../services/envd_base64"
+
 module E2B
   module Models
     # Result of a process execution
@@ -76,11 +78,7 @@ module E2B
       end
 
       def self.decode_base64_safe(data)
-        return "" if data.nil? || data.empty?
-
-        Base64.decode64(data)
-      rescue
-        data.to_s
+        E2B::Services::EnvdBase64.decode_process_output(data)
       end
 
       # Parse exit code from various formats
