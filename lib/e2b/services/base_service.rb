@@ -251,17 +251,35 @@ module E2B
       # inherit proxy configuration and SSL settings. The streaming is handled
       # via Faraday's on_data callback for chunked response processing.
       #
-      # Streaming RPCs are NOT idempotent (e.g. process.Process/Start spawns a
-      # process), so we only retry while no events have been emitted to the
-      # caller yet. Once any byte has been delivered via on_event, a retry
-      # would replay output AND start a second process server-side.
+      # Retry policy:
+      #
+      # * `process.Process/Start` is **never retried**. The POST may have
+      #   already reached envd and triggered a process spawn before the
+      #   transport error surfaced; retrying would race a second process
+      #   against the first. We've seen `git clone` fail with "destination
+      #   already exists" exactly this way — first attempt spawns a process
+      #   that mkdir's the target, transport blips, retry spawns process #2
+      #   that finds the target non-empty. Caller decides what to do.
+      #
+      # * Other streaming paths (`Connect` re-attach, etc.) retry while no
+      #   events have been emitted yet. Once any byte has been delivered
+      #   via on_event, a retry would replay output to the caller, so we
+      #   abort.
       def handle_streaming_rpc(path, envelope, timeout, on_event, headers)
         result = { events: [], stdout: "", stderr: "", exit_code: nil }
         buffer = "".b
 
         full_path = normalize_path(path)
+        non_idempotent = path.end_with?("/Start")
 
-        with_retry("Streaming RPC #{path}", abort_if: -> { result[:events].any? }) do
+        retry_opts =
+          if non_idempotent
+            { max_retries: 0 }
+          else
+            { abort_if: -> { result[:events].any? } }
+          end
+
+        with_retry("Streaming RPC #{path}", **retry_opts) do
           ssl_verify = ENV.fetch("E2B_SSL_VERIFY", "true").downcase != "false"
 
           streaming_conn = Faraday.new(url: @base_url, ssl: { verify: ssl_verify }) do |conn|

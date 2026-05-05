@@ -190,6 +190,29 @@ RSpec.describe E2B::Services::Commands do
           expect(error.command_error).to eq("command failed")
         }
     end
+
+    # Regression: a transport hiccup mid-Start used to retry the streaming
+    # RPC, which racing-spawned a second process inside the sandbox. We
+    # observed this as `git clone` failing "destination already exists" —
+    # the first spawn had already mkdir'd the target. Start is not safe
+    # to retry; the failure must surface to the caller on the first try.
+    it "does NOT retry process.Process/Start on transport errors" do
+      faraday_post_calls = 0
+      bad_conn = instance_double(Faraday::Connection)
+      allow(bad_conn).to receive(:post) do
+        faraday_post_calls += 1
+        raise Errno::ECONNRESET, "connection reset by peer"
+      end
+      allow(Faraday).to receive(:new).and_return(bad_conn)
+      allow(commands).to receive(:sleep) # neutralize backoff if it fires
+
+      expect {
+        commands.run("echo hi", on_stdout: ->(_) {}) # on_stdout forces streaming RPC path
+      }.to raise_error(E2B::E2BError)
+
+      expect(faraday_post_calls).to eq(1),
+        "Start must NOT retry on transport errors (got #{faraday_post_calls} POSTs)"
+    end
   end
 
   describe "#connect" do
