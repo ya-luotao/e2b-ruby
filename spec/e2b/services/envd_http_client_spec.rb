@@ -44,14 +44,9 @@ RSpec.describe E2B::Services::EnvdHttpClient do
   end
 
   describe "#decode_base64" do
-    it "decodes base64-encoded data" do
+    it "delegates to EnvdBase64.decode_process_output" do
       encoded = Base64.strict_encode64("hello")
-      expect(client.send(:decode_base64, encoded)).to eq("hello")
-    end
-
-    it "returns empty string for nil/empty input" do
-      expect(client.send(:decode_base64, nil)).to eq("")
-      expect(client.send(:decode_base64, "")).to eq("")
+      expect(client.send(:decode_base64, encoded)).to eq(E2B::Services::EnvdBase64.decode_process_output(encoded))
     end
   end
 

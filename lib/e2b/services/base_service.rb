@@ -4,6 +4,7 @@ require "base64"
 require "net/http"
 require "openssl"
 require "rubygems/version"
+require_relative "envd_base64"
 
 module E2B
   module Services
@@ -577,11 +578,7 @@ module E2B
       end
 
       def decode_base64(data)
-        return "" if data.nil? || data.empty?
-
-        Base64.decode64(data)
-      rescue StandardError
-        data.to_s
+        EnvdBase64.decode_process_output(data)
       end
 
       def handle_error(response)

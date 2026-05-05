@@ -55,7 +55,7 @@ module E2B
 
         process_spec[:cwd] = cwd if cwd
 
-        body = { process: process_spec }
+        body = { process: process_spec, stdin: false }
         headers = user_auth_headers(user)
 
         # Set up streaming callback
