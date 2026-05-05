@@ -17,8 +17,9 @@ Gemfile.lock
 # VCR cassettes (may contain API keys)
 spec/cassettes/
 
-# Claude Code
-.claude/
+# Claude Code — share commands/agents/skills, ignore local runtime state
+.claude/*.lock
+.claude/settings.local.json
 
 # IDE
 .idea/
