@@ -2,6 +2,12 @@
 
 All notable changes to the E2B Ruby SDK will be documented in this file.
 
+## [0.3.3] - 2026-05-05
+
+### Added
+
+- **`disk_size_mb:` keyword on `Template.build` and `Template.build_in_background`** — sets the template root disk size in megabytes. Forwarded to `POST /v3/templates` as `diskSizeMB`; the field is omitted from the request body when not provided so existing builds remain unchanged.
+
 ## [0.3.2] - 2026-04-30
 
 ### Fixed
@@ -115,6 +121,8 @@ Initial development version (not published to RubyGems).
 - Faraday-based HTTP client for E2B management API
 - Connect RPC binary envelope parsing
 
+[0.3.3]: https://github.com/ya-luotao/e2b-ruby/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/ya-luotao/e2b-ruby/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/ya-luotao/e2b-ruby/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ya-luotao/e2b-ruby/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ya-luotao/e2b-ruby/compare/v0.1.0...v0.2.0
