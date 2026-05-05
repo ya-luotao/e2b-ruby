@@ -675,6 +675,38 @@ RSpec.describe E2B::Template do
       end
     end
 
+    it "forwards disk_size_mb as diskSizeMB in the create request" do
+      template = described_class.new.from_base_image
+
+      expect(http_client).to receive(:post)
+        .with(
+          "/v3/templates",
+          body: {
+            name: "my-template",
+            tags: nil,
+            cpuCount: 2,
+            memoryMB: 1024,
+            diskSizeMB: 4096
+          }
+        )
+        .and_return({
+          "templateID" => "tpl_123",
+          "buildID" => "bld_123",
+          "tags" => []
+        })
+      expect(http_client).to receive(:post)
+        .with("/v2/templates/tpl_123/builds/bld_123", body: kind_of(Hash))
+
+      build_info = described_class.build_in_background(
+        template,
+        name: "my-template",
+        disk_size_mb: 4096,
+        api_key: "api-key"
+      )
+
+      expect(build_info.template_id).to eq("tpl_123")
+    end
+
     it "wraps file upload link failures in FileUploadError with source attribution" do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
@@ -868,6 +900,7 @@ RSpec.describe E2B::Template do
         tags: nil,
         cpu_count: 2,
         memory_mb: 1024,
+        disk_size_mb: nil,
         skip_cache: false,
         on_build_logs: nil,
         api_key: "api-key",

@@ -134,7 +134,8 @@ module E2B
         end
       end
 
-      def build(template, name: nil, alias_name: nil, tags: nil, cpu_count: 2, memory_mb: 1024, skip_cache: false,
+      def build(template, name: nil, alias_name: nil, tags: nil, cpu_count: 2, memory_mb: 1024,
+                disk_size_mb: nil, skip_cache: false,
                 on_build_logs: nil, api_key: nil, access_token: nil, domain: nil, **opts)
         on_build_logs&.call(Models::TemplateLogEntryStart.new(timestamp: Time.now, message: "Build started"))
 
@@ -145,6 +146,7 @@ module E2B
           tags: tags,
           cpu_count: cpu_count,
           memory_mb: memory_mb,
+          disk_size_mb: disk_size_mb,
           skip_cache: skip_cache,
           on_build_logs: on_build_logs,
           api_key: api_key,
@@ -168,7 +170,8 @@ module E2B
       end
 
       def build_in_background(template, name: nil, alias_name: nil, tags: nil, cpu_count: 2, memory_mb: 1024,
-                              skip_cache: false, on_build_logs: nil, api_key: nil, access_token: nil, domain: nil, **opts)
+                              disk_size_mb: nil, skip_cache: false, on_build_logs: nil,
+                              api_key: nil, access_token: nil, domain: nil, **opts)
         alias_name ||= opts[:alias] || opts["alias"]
         resolved_name = normalize_build_name(name: name, alias_name: alias_name)
         template.send(:force_build!) if skip_cache
@@ -179,12 +182,14 @@ module E2B
         tags_message = Array(tags).any? ? " with tags #{Array(tags).join(', ')}" : ""
         on_build_logs&.call(log_entry("Requesting build for template: #{resolved_name}#{tags_message}"))
 
-        create_response = http_client.post("/v3/templates", body: {
+        body = {
           name: resolved_name,
           tags: tags,
           cpuCount: cpu_count,
           memoryMB: memory_mb
-        })
+        }
+        body[:diskSizeMB] = disk_size_mb if disk_size_mb
+        create_response = http_client.post("/v3/templates", body: body)
 
         build_info = Models::BuildInfo.new(
           alias_name: resolved_name,
