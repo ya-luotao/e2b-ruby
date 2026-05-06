@@ -15,7 +15,7 @@ module E2B
     # Connect RPC protocol (gRPC-over-HTTP with JSON encoding).
     class BaseService
       # Default envd port
-      ENVD_PORT = 49983
+      ENVD_PORT = 49_983
       DEFAULT_USERNAME = "user"
       ENVD_DEFAULT_USER_VERSION = Gem::Version.new("0.4.0")
       ENVD_RECURSIVE_WATCH_VERSION = Gem::Version.new("0.1.4")
@@ -150,7 +150,7 @@ module E2B
         end
       end
 
-      def initialize(base_url:, api_key:, access_token: nil, sandbox_id:, logger: nil)
+      def initialize(base_url:, api_key:, sandbox_id:, access_token: nil, logger: nil)
         @base_url = base_url.end_with?("/") ? base_url : "#{base_url}/"
         @api_key = api_key
         @access_token = access_token
@@ -203,16 +203,14 @@ module E2B
 
         log_debug("RPC #{service}/#{method}")
 
-        if on_event
-          return handle_streaming_rpc(path, envelope, timeout, on_event, headers)
-        end
+        return handle_streaming_rpc(path, envelope, timeout, on_event, headers) if on_event
 
         # Unary RPCs: try Connect protocol first, fall back to plain JSON.
         # Some envd versions (e.g., 0.5.4 on self-hosted) reject
         # application/connect+json for unary calls but accept application/json.
         handle_rpc_response(service, method) do
           with_retry("RPC #{service}/#{method}") do
-            url = URI.parse("#{@base_url.chomp('/')}#{path}")
+            url = URI.parse("#{@base_url.chomp("/")}#{path}")
             http = build_http(url, timeout)
 
             request = Net::HTTP::Post.new(url.request_uri)
@@ -305,10 +303,11 @@ module E2B
             req.body = envelope
             req.options.on_data = proc do |chunk, _overall_size, _env|
               next if chunk.nil? || chunk.empty?
+
               buffer << chunk
 
               while buffer.bytesize >= 5
-                flags = buffer.getbyte(0)
+                buffer.getbyte(0)
                 length = buffer.byteslice(1, 4).unpack1("N")
 
                 break if length.nil? || buffer.bytesize < 5 + length
@@ -342,7 +341,8 @@ module E2B
 
                     end_event = event["End"] || event["end"]
                     if end_event
-                      result[:exit_code] = parse_exit_code(end_event["exitCode"] || end_event["exit_code"] || end_event["status"])
+                      result[:exit_code] =
+                        parse_exit_code(end_event["exitCode"] || end_event["exit_code"] || end_event["status"])
                     end
                   end
 
@@ -354,9 +354,7 @@ module E2B
                     stderr_data = EnvdBase64.decode_process_output(msg["stderr"])
                     result[:stderr] += stderr_data
                   end
-                  if msg["exitCode"] || msg["exit_code"]
-                    result[:exit_code] = parse_exit_code(msg["exitCode"] || msg["exit_code"])
-                  end
+                  result[:exit_code] = parse_exit_code(msg["exitCode"] || msg["exit_code"]) if msg["exitCode"] || msg["exit_code"]
 
                   on_event.call(
                     stdout: stdout_data,
@@ -371,9 +369,7 @@ module E2B
             end
           end
 
-          unless response.status.between?(200, 299)
-            handle_error(response)
-          end
+          handle_error(response) unless response.status.between?(200, 299)
         end
 
         result
@@ -428,13 +424,20 @@ module E2B
       end
 
       def resolve_proxy(url)
-        no_proxy = ENV["no_proxy"] || ENV["NO_PROXY"]
+        no_proxy = ENV["no_proxy"] || ENV.fetch("NO_PROXY", nil)
         if no_proxy
           no_proxy_hosts = no_proxy.split(",").map(&:strip)
           return nil if no_proxy_hosts.any? { |h| url.host.end_with?(h) || h == "*" }
         end
 
-        proxy_env = url.scheme == "https" ? (ENV["https_proxy"] || ENV["HTTPS_PROXY"]) : (ENV["http_proxy"] || ENV["HTTP_PROXY"])
+        proxy_env = if url.scheme == "https"
+                      ENV["https_proxy"] || ENV.fetch("HTTPS_PROXY",
+                                                      nil)
+                    else
+                      ENV["http_proxy"] || ENV.fetch(
+                        "HTTP_PROXY", nil
+                      )
+                    end
         return nil unless proxy_env
 
         URI.parse(proxy_env)
@@ -455,14 +458,12 @@ module E2B
 
           retry_count += 1
 
-          if retry_count <= max_retries
-            sleep_time = 2**retry_count
-            log_debug("#{operation}: retry #{retry_count}/#{max_retries} after #{e.class}: #{e.message}")
-            sleep(sleep_time)
-            retry
-          else
-            raise E2B::E2BError, "#{operation} failed after #{max_retries} retries: #{e.message}"
-          end
+          raise E2B::E2BError, "#{operation} failed after #{max_retries} retries: #{e.message}" unless retry_count <= max_retries
+
+          sleep_time = 2**retry_count
+          log_debug("#{operation}: retry #{retry_count}/#{max_retries} after #{e.class}: #{e.message}")
+          sleep(sleep_time)
+          retry
         end
       end
 
@@ -473,7 +474,11 @@ module E2B
         body = response.body
 
         if body.is_a?(String) && !body.empty?
-          content_type = response.headers["content-type"] rescue "unknown"
+          content_type = begin
+            response.headers["content-type"]
+          rescue StandardError
+            "unknown"
+          end
           if content_type&.include?("json") || body.start_with?("{", "[")
             begin
               return JSON.parse(body)
@@ -490,7 +495,7 @@ module E2B
         raise E2B::E2BError, "Connection to sandbox failed: #{e.message}"
       end
 
-      def handle_rpc_response(service, method)
+      def handle_rpc_response(_service, _method)
         response = yield
 
         handle_error(response) unless response.success?
@@ -503,36 +508,32 @@ module E2B
         messages = parse_connect_stream(body)
 
         messages.each do |msg_str|
-          begin
-            msg = JSON.parse(msg_str)
-            msg = msg["result"] if msg["result"]
+          msg = JSON.parse(msg_str)
+          msg = msg["result"] if msg["result"]
 
-            result[:events] << msg
+          result[:events] << msg
 
-            if msg["event"]
-              event = msg["event"]
+          if msg["event"]
+            event = msg["event"]
 
-              data_event = event["Data"] || event["data"]
-              if data_event
-                result[:stdout] += EnvdBase64.decode_process_output(data_event["stdout"]) if data_event["stdout"]
-                result[:stderr] += EnvdBase64.decode_process_output(data_event["stderr"]) if data_event["stderr"]
-              end
-
-              end_event = event["End"] || event["end"]
-              if end_event
-                exit_value = end_event["exitCode"] || end_event["exit_code"] || end_event["status"]
-                result[:exit_code] = parse_exit_code(exit_value)
-              end
+            data_event = event["Data"] || event["data"]
+            if data_event
+              result[:stdout] += EnvdBase64.decode_process_output(data_event["stdout"]) if data_event["stdout"]
+              result[:stderr] += EnvdBase64.decode_process_output(data_event["stderr"]) if data_event["stderr"]
             end
 
-            result[:stdout] += EnvdBase64.decode_process_output(msg["stdout"]) if msg["stdout"]
-            result[:stderr] += EnvdBase64.decode_process_output(msg["stderr"]) if msg["stderr"]
-            if msg["exitCode"] || msg["exit_code"]
-              result[:exit_code] = parse_exit_code(msg["exitCode"] || msg["exit_code"])
+            end_event = event["End"] || event["end"]
+            if end_event
+              exit_value = end_event["exitCode"] || end_event["exit_code"] || end_event["status"]
+              result[:exit_code] = parse_exit_code(exit_value)
             end
-          rescue JSON::ParserError
-            # Skip unparseable messages
           end
+
+          result[:stdout] += EnvdBase64.decode_process_output(msg["stdout"]) if msg["stdout"]
+          result[:stderr] += EnvdBase64.decode_process_output(msg["stderr"]) if msg["stderr"]
+          result[:exit_code] = parse_exit_code(msg["exitCode"] || msg["exit_code"]) if msg["exitCode"] || msg["exit_code"]
+        rescue JSON::ParserError
+          # Skip unparseable messages
         end
 
         result
@@ -587,9 +588,9 @@ module E2B
 
         str = value.to_s
         if str =~ /exit status (\d+)/i
-          $1.to_i
+          ::Regexp.last_match(1).to_i
         elsif str =~ /^(\d+)$/
-          $1.to_i
+          ::Regexp.last_match(1).to_i
         else
           1
         end

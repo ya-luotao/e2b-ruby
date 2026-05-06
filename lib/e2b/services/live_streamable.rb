@@ -22,31 +22,31 @@ module E2B
 
           begin
             envd_rpc("process.Process", rpc_method,
-              body: body,
-              timeout: timeout,
-              headers: headers,
-              on_event: lambda { |event_data|
-                stream_event = event_data[:event]
-                stream.push(stream_event) if stream_event
+                     body: body,
+                     timeout: timeout,
+                     headers: headers,
+                     on_event: lambda { |event_data|
+                       stream_event = event_data[:event]
+                       stream.push(stream_event) if stream_event
 
-                stdout_chunk = event_data[:stdout]
-                stderr_chunk = event_data[:stderr]
+                       stdout_chunk = event_data[:stdout]
+                       stderr_chunk = event_data[:stderr]
 
-                on_stdout&.call(stdout_chunk) if stdout_chunk && !stdout_chunk.empty?
-                on_stderr&.call(stderr_chunk) if stderr_chunk && !stderr_chunk.empty?
+                       on_stdout&.call(stdout_chunk) if stdout_chunk && !stdout_chunk.empty?
+                       on_stderr&.call(stderr_chunk) if stderr_chunk && !stderr_chunk.empty?
 
-                stream_block&.call(:stdout, stdout_chunk) if stdout_chunk && !stdout_chunk.empty?
-                stream_block&.call(:stderr, stderr_chunk) if stderr_chunk && !stderr_chunk.empty?
+                       stream_block&.call(:stdout, stdout_chunk) if stdout_chunk && !stdout_chunk.empty?
+                       stream_block&.call(:stderr, stderr_chunk) if stderr_chunk && !stderr_chunk.empty?
 
-                unless start_signal_sent
-                  extracted_pid = extract_pid_from_event(stream_event)
-                  if extracted_pid
-                    pid = extracted_pid
-                    start_signal_sent = true
-                    start_queue << [:pid, pid]
-                  end
-                end
-              })
+                       unless start_signal_sent
+                         extracted_pid = extract_pid_from_event(stream_event)
+                         if extracted_pid
+                           pid = extracted_pid
+                           start_signal_sent = true
+                           start_queue << [:pid, pid]
+                         end
+                       end
+                     })
 
             unless start_signal_sent
               start_signal_sent = true

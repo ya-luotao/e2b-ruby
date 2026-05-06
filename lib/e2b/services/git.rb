@@ -84,7 +84,7 @@ module E2B
       #
       # @return [Boolean]
       def has_conflicts?
-        file_status.any? { |f| f.index_status == "u" || f.index_status == "U" }
+        file_status.any? { |f| %w[u U].include?(f.index_status) }
       end
 
       # Number of staged files
@@ -105,7 +105,7 @@ module E2B
       #
       # @return [Integer]
       def conflict_count
-        file_status.count { |f| f.index_status == "u" || f.index_status == "U" }
+        file_status.count { |f| %w[u U].include?(f.index_status) }
       end
 
       # Number of modified files (in the working tree)
@@ -571,7 +571,7 @@ module E2B
                                    envs: nil, user: nil, cwd: nil, timeout: nil)
         # Configure credential helper to use the store
         set_config("credential.helper", "store", scope: "global",
-                   envs: envs, user: user, cwd: cwd, timeout: timeout)
+                                                 envs: envs, user: user, cwd: cwd, timeout: timeout)
 
         # Write credentials to the credential store via git credential approve
         credential_input = [
@@ -583,7 +583,7 @@ module E2B
         ].join("\n")
 
         escaped_input = Shellwords.escape(credential_input)
-        args = ["credential", "approve"]
+        args = %w[credential approve]
         cmd = build_git_command(args, nil)
         full_cmd = "echo #{escaped_input} | #{cmd}"
 
@@ -604,9 +604,9 @@ module E2B
       # @return [void]
       def configure_user(name, email, scope: "global", path: nil, envs: nil, user: nil, cwd: nil, timeout: nil)
         set_config("user.name", name, scope: scope, path: path,
-                   envs: envs, user: user, cwd: cwd, timeout: timeout)
+                                      envs: envs, user: user, cwd: cwd, timeout: timeout)
         set_config("user.email", email, scope: scope, path: path,
-                   envs: envs, user: user, cwd: cwd, timeout: timeout)
+                                        envs: envs, user: user, cwd: cwd, timeout: timeout)
       end
 
       private
@@ -781,7 +781,7 @@ module E2B
       def validate_scope!(scope)
         return if VALID_SCOPES.include?(scope)
 
-        raise E2B::E2BError, "Invalid git config scope '#{scope}'. Must be one of: #{VALID_SCOPES.join(', ')}"
+        raise E2B::E2BError, "Invalid git config scope '#{scope}'. Must be one of: #{VALID_SCOPES.join(", ")}"
       end
 
       # Convert a scope name to its git CLI flag
@@ -835,7 +835,7 @@ module E2B
             file_status << GitFileStatus.new(path: filepath.split("\t").first, index_status: idx, work_tree_status: wt)
           when /\Au (.)(.) .+ .+ .+ .+ .+ (.+)\z/
             # Unmerged entry
-            idx = Regexp.last_match(1)
+            Regexp.last_match(1)
             wt = Regexp.last_match(2)
             filepath = Regexp.last_match(3)
             file_status << GitFileStatus.new(path: filepath, index_status: "u", work_tree_status: wt)

@@ -209,10 +209,10 @@ RSpec.describe E2B::Sandbox do
       allow(http_client).to receive(:post)
         .with("/sandboxes/sbx_123/connect", body: { timeout: 30 })
         .and_return({
-          "sandboxID" => "sbx_123",
-          "endAt" => "2026-03-12T01:00:00Z",
-          "domain" => "resume.e2b.test"
-        })
+                      "sandboxID" => "sbx_123",
+                      "endAt" => "2026-03-12T01:00:00Z",
+                      "domain" => "resume.e2b.test"
+                    })
 
       sandbox = described_class.connect("sbx_123", timeout: 30, api_key: "api-key")
 

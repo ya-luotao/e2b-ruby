@@ -117,11 +117,11 @@ RSpec.describe E2B::Services::Commands do
 
       expect(result.output).to eq("hellowarn")
       expect(streamed).to eq([
-        [:stdout, "hello"],
-        [:stdout, "hello"],
-        [:stderr, "warn"],
-        [:stderr, "warn"]
-      ])
+                               [:stdout, "hello"],
+                               [:stdout, "hello"],
+                               [:stderr, "warn"],
+                               [:stderr, "warn"]
+                             ])
     end
 
     it "returns a live handle for background commands, waits on streamed output, and preserves user auth" do
@@ -206,12 +206,12 @@ RSpec.describe E2B::Services::Commands do
       allow(Faraday).to receive(:new).and_return(bad_conn)
       allow(commands).to receive(:sleep) # neutralize backoff if it fires
 
-      expect {
+      expect do
         commands.run("echo hi", on_stdout: ->(_) {}) # on_stdout forces streaming RPC path
-      }.to raise_error(E2B::E2BError)
+      end.to raise_error(E2B::E2BError)
 
       expect(faraday_post_calls).to eq(1),
-        "Start must NOT retry on transport errors (got #{faraday_post_calls} POSTs)"
+                                    "Start must NOT retry on transport errors (got #{faraday_post_calls} POSTs)"
     end
   end
 
@@ -227,7 +227,8 @@ RSpec.describe E2B::Services::Commands do
 
         on_event.call(stdout: nil, stderr: nil, exit_code: nil, event: process_start_event(42))
         release_stream.pop
-        on_event.call(stdout: "reconnected", stderr: nil, exit_code: nil, event: process_data_event(stdout: "reconnected"))
+        on_event.call(stdout: "reconnected", stderr: nil, exit_code: nil,
+                      event: process_data_event(stdout: "reconnected"))
         on_event.call(stdout: nil, stderr: nil, exit_code: 0, event: process_end_event(exit_code: 0))
 
         { stdout: "reconnected", stderr: "", exit_code: 0, events: [] }

@@ -74,9 +74,7 @@ module E2B
       body[:envVars] = envs if envs
       body[:mcp] = mcp if mcp
       body[:network] = network if network
-      if body[:autoPause]
-        body[:autoResume] = { enabled: lifecycle[:auto_resume] }
-      end
+      body[:autoResume] = { enabled: lifecycle[:auto_resume] } if body[:autoPause]
 
       response = @http_client.post("/sandboxes", body: body, timeout: request_timeout || @config.request_timeout || 120)
       ensure_supported_envd_version!(response, @http_client)
@@ -101,7 +99,7 @@ module E2B
     def connect(sandbox_id, timeout: nil)
       timeout_seconds = timeout || ((@config.sandbox_timeout_ms || (Sandbox::DEFAULT_TIMEOUT * 1000)) / 1000).to_i
       response = @http_client.post("/sandboxes/#{sandbox_id}/connect",
-        body: { timeout: timeout_seconds })
+                                   body: { timeout: timeout_seconds })
 
       Sandbox.new(
         sandbox_data: response,
@@ -162,7 +160,7 @@ module E2B
     # @param timeout [Integer] Timeout in seconds
     def set_timeout(sandbox_id, timeout)
       @http_client.post("/sandboxes/#{sandbox_id}/timeout",
-        body: { timeout: timeout })
+                        body: { timeout: timeout })
     end
 
     # Pause a sandbox

@@ -2,15 +2,17 @@
 
 require "bundler/gem_tasks"
 require "rspec/core/rake_task"
+require "rubocop/rake_task"
 
 RSpec::Core::RakeTask.new(:spec)
+RuboCop::RakeTask.new
 
-task default: :spec
+task default: %i[spec rubocop]
 
 desc "Run examples (requires E2B_API_KEY)"
 task :examples do
   Dir["examples/*.rb"].each do |example|
-    puts "\n" + "=" * 60
+    puts "\n" + ("=" * 60)
     puts "Running: #{example}"
     puts "=" * 60
     system("ruby #{example}")

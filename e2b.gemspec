@@ -22,15 +22,18 @@ Gem::Specification.new do |spec|
   spec.metadata["source_code_uri"] = "https://github.com/ya-luotao/e2b-ruby"
   spec.metadata["documentation_uri"] = "https://e2b.dev/docs"
   spec.metadata["changelog_uri"] = "https://github.com/ya-luotao/e2b-ruby/blob/main/CHANGELOG.md"
+  spec.metadata["rubygems_mfa_required"] = "true"
 
   spec.files = Dir.glob("lib/**/*") + ["README.md", "LICENSE.txt"]
   spec.require_paths = ["lib"]
 
+  spec.add_dependency "base64", "~> 0.2"
   spec.add_dependency "faraday", ">= 1.0", "< 3.0"
   spec.add_dependency "faraday-multipart", "~> 1.0"
-  spec.add_dependency "base64", "~> 0.2"
 
   spec.add_development_dependency "rake", "~> 13.0"
   spec.add_development_dependency "rspec", "~> 3.0"
+  spec.add_development_dependency "rubocop", "~> 1.72"
+  spec.add_development_dependency "rubocop-rspec", "~> 3.0"
   spec.add_development_dependency "webmock", "~> 3.0"
 end

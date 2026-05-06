@@ -99,9 +99,9 @@ module E2B
       #   entries.each { |e| puts "#{e.name} (#{e.type})" }
       def list(path, depth: 1, user: nil, request_timeout: 60)
         response = envd_rpc("filesystem.Filesystem", "ListDir",
-          body: { path: path, depth: depth },
-          timeout: request_timeout,
-          headers: user_auth_headers(user))
+                            body: { path: path, depth: depth },
+                            timeout: request_timeout,
+                            headers: user_auth_headers(user))
 
         entries = extract_entries(response)
         entries.map { |e| Models::EntryInfo.from_hash(e) }
@@ -132,9 +132,9 @@ module E2B
       # @return [Models::EntryInfo] File/directory info
       def get_info(path, user: nil, request_timeout: 30)
         response = envd_rpc("filesystem.Filesystem", "Stat",
-          body: { path: path },
-          timeout: request_timeout,
-          headers: user_auth_headers(user))
+                            body: { path: path },
+                            timeout: request_timeout,
+                            headers: user_auth_headers(user))
 
         entry_data = extract_entry(response)
         Models::EntryInfo.from_hash(entry_data)
@@ -147,9 +147,9 @@ module E2B
       # @param request_timeout [Integer] Request timeout in seconds
       def remove(path, user: nil, request_timeout: 30)
         envd_rpc("filesystem.Filesystem", "Remove",
-          body: { path: path },
-          timeout: request_timeout,
-          headers: user_auth_headers(user))
+                 body: { path: path },
+                 timeout: request_timeout,
+                 headers: user_auth_headers(user))
       end
 
       # Rename/move a file or directory
@@ -161,9 +161,9 @@ module E2B
       # @return [Models::EntryInfo] Info about the moved entry
       def rename(old_path, new_path, user: nil, request_timeout: 30)
         response = envd_rpc("filesystem.Filesystem", "Move",
-          body: { source: old_path, destination: new_path },
-          timeout: request_timeout,
-          headers: user_auth_headers(user))
+                            body: { source: old_path, destination: new_path },
+                            timeout: request_timeout,
+                            headers: user_auth_headers(user))
 
         entry_data = extract_entry(response)
         Models::EntryInfo.from_hash(entry_data)
@@ -177,9 +177,9 @@ module E2B
       # @return [Boolean] true if created successfully
       def make_dir(path, user: nil, request_timeout: 30)
         envd_rpc("filesystem.Filesystem", "MakeDir",
-          body: { path: path },
-          timeout: request_timeout,
-          headers: user_auth_headers(user))
+                 body: { path: path },
+                 timeout: request_timeout,
+                 headers: user_auth_headers(user))
         true
       end
 
@@ -202,13 +202,13 @@ module E2B
       def watch_dir(path, recursive: false, user: nil, request_timeout: 30)
         if recursive && !supports_recursive_watch?
           raise E2B::TemplateError,
-            "You need to update the template to use recursive watching. You can do this by running `e2b template build` in the directory with the template."
+                "You need to update the template to use recursive watching. You can do this by running `e2b template build` in the directory with the template."
         end
 
         response = envd_rpc("filesystem.Filesystem", "CreateWatcher",
-          body: { path: path, recursive: recursive },
-          timeout: request_timeout,
-          headers: user_auth_headers(user))
+                            body: { path: path, recursive: recursive },
+                            timeout: request_timeout,
+                            headers: user_auth_headers(user))
 
         watcher_id = response[:events]&.first&.dig("watcherId") ||
                      response["watcherId"] ||
@@ -257,9 +257,8 @@ module E2B
 
           response = execute_http_request(uri, request, timeout: timeout)
           unless successful_response?(response)
-            if response.code.to_i == 404
-              raise E2B::NotFoundError.new("File not found", status_code: 404)
-            end
+            raise E2B::NotFoundError.new("File not found", status_code: 404) if response.code.to_i == 404
+
             raise E2B::E2BError, "File read failed: HTTP #{response.code}"
           end
 
@@ -281,9 +280,7 @@ module E2B
           apply_request_headers(request)
 
           response = execute_http_request(uri, request, timeout: timeout)
-          unless successful_response?(response)
-            raise E2B::E2BError, "File upload failed: HTTP #{response.code}"
-          end
+          raise E2B::E2BError, "File upload failed: HTTP #{response.code}" unless successful_response?(response)
 
           parse_upload_response(response.body)
         end
@@ -344,13 +341,11 @@ module E2B
         rescue OpenSSL::SSL::SSLError, Errno::ECONNRESET, EOFError, Net::OpenTimeout, Net::ReadTimeout => e
           retry_count += 1
 
-          if retry_count <= max_retries
-            sleep_time = 2**retry_count
-            sleep(sleep_time)
-            retry
-          else
-            raise E2B::E2BError, "#{operation} failed after #{max_retries} retries: #{e.message}"
-          end
+          raise E2B::E2BError, "#{operation} failed after #{max_retries} retries: #{e.message}" unless retry_count <= max_retries
+
+          sleep_time = 2**retry_count
+          sleep(sleep_time)
+          retry
         end
       end
 
@@ -365,6 +360,7 @@ module E2B
 
         events.each do |event|
           next unless event.is_a?(Hash)
+
           # Direct entries field
           if event["entries"]
             entries.concat(Array(event["entries"]))
@@ -400,6 +396,7 @@ module E2B
         events.each do |event|
           next unless event.is_a?(Hash)
           return event["watcherId"] || event["watcher_id"] if event["watcherId"] || event["watcher_id"]
+
           result = event["result"]
           return result["watcherId"] || result["watcher_id"] if result.is_a?(Hash) && (result["watcherId"] || result["watcher_id"])
         end

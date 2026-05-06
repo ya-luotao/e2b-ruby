@@ -45,9 +45,9 @@ module E2B
         credentials = resolve_credentials(api_key: api_key, access_token: access_token)
         http_client = build_http_client(**credentials, domain: resolve_domain(domain))
         response = http_client.post("/templates/tags", body: {
-          target: target_name,
-          tags: normalize_tags(tags)
-        })
+                                      target: target_name,
+                                      tags: normalize_tags(tags)
+                                    })
 
         Models::TemplateTagInfo.from_hash(response)
       end
@@ -56,9 +56,9 @@ module E2B
         credentials = resolve_credentials(api_key: api_key, access_token: access_token)
         http_client = build_http_client(**credentials, domain: resolve_domain(domain))
         http_client.delete("/templates/tags", body: {
-          name: name,
-          tags: normalize_tags(tags)
-        })
+                             name: name,
+                             tags: normalize_tags(tags)
+                           })
         nil
       end
 
@@ -179,7 +179,7 @@ module E2B
         credentials = resolve_credentials(api_key: api_key, access_token: access_token)
         http_client = build_http_client(**credentials, domain: resolve_domain(domain))
 
-        tags_message = Array(tags).any? ? " with tags #{Array(tags).join(', ')}" : ""
+        tags_message = Array(tags).any? ? " with tags #{Array(tags).join(", ")}" : ""
         on_build_logs&.call(log_entry("Requesting build for template: #{resolved_name}#{tags_message}"))
 
         body = {
@@ -338,11 +338,11 @@ module E2B
 
           if build_info.is_a?(Hash)
             resolved_template_id = build_info[:template_id] || build_info["template_id"] ||
-              build_info[:templateID] || build_info["templateID"]
+                                   build_info[:templateID] || build_info["templateID"]
             resolved_build_id = build_info[:build_id] || build_info["build_id"] ||
-              build_info[:buildID] || build_info["buildID"]
+                                build_info[:buildID] || build_info["buildID"]
             resolved_build_step_origins ||= build_info[:build_step_origins] || build_info["build_step_origins"] ||
-              build_info[:buildStepOrigins] || build_info["buildStepOrigins"]
+                                            build_info[:buildStepOrigins] || build_info["buildStepOrigins"]
 
             return [resolved_template_id, resolved_build_id, Array(resolved_build_step_origins).compact]
           end
@@ -404,12 +404,12 @@ module E2B
       end
 
       def resolve_credentials(api_key:, access_token:)
-        resolved_api_key = api_key || E2B.configuration&.api_key || ENV["E2B_API_KEY"]
-        resolved_access_token = access_token || E2B.configuration&.access_token || ENV["E2B_ACCESS_TOKEN"]
+        resolved_api_key = api_key || E2B.configuration&.api_key || ENV.fetch("E2B_API_KEY", nil)
+        resolved_access_token = access_token || E2B.configuration&.access_token || ENV.fetch("E2B_ACCESS_TOKEN", nil)
 
         unless (resolved_api_key && !resolved_api_key.empty?) || (resolved_access_token && !resolved_access_token.empty?)
           raise ConfigurationError,
-            "E2B credentials are required. Set E2B_API_KEY or E2B_ACCESS_TOKEN, or pass api_key:/access_token:."
+                "E2B credentials are required. Set E2B_API_KEY or E2B_ACCESS_TOKEN, or pass api_key:/access_token:."
         end
 
         { api_key: resolved_api_key, access_token: resolved_access_token }
@@ -638,7 +638,7 @@ module E2B
 
     def pip_install(packages = nil, g: true)
       package_list = packages.nil? ? nil : Array(packages).map(&:to_s)
-      args = ["pip", "install"]
+      args = %w[pip install]
       args << "--user" unless g
       args.concat(package_list || ["."])
       run_cmd(args.join(" "), user: g ? "root" : nil)
@@ -646,7 +646,7 @@ module E2B
 
     def npm_install(packages = nil, g: false, dev: false)
       package_list = packages.nil? ? nil : Array(packages).map(&:to_s)
-      args = ["npm", "install"]
+      args = %w[npm install]
       args << "-g" if g
       args << "--save-dev" if dev
       args.concat(package_list) if package_list
@@ -655,7 +655,7 @@ module E2B
 
     def bun_install(packages = nil, g: false, dev: false)
       package_list = packages.nil? ? nil : Array(packages).map(&:to_s)
-      args = ["bun", "install"]
+      args = %w[bun install]
       args << "-g" if g
       args << "--dev" if dev
       args.concat(package_list) if package_list
@@ -668,7 +668,7 @@ module E2B
       run_cmd(
         [
           "apt-get update",
-          "DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y #{install_flags}#{package_list.join(' ')}"
+          "DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y #{install_flags}#{package_list.join(" ")}"
         ],
         user: "root"
       )
@@ -683,7 +683,7 @@ module E2B
       end
 
       server_list = Array(servers).map(&:to_s)
-      run_cmd("mcp-gateway pull #{server_list.join(' ')}", user: "root")
+      run_cmd("mcp-gateway pull #{server_list.join(" ")}", user: "root")
     end
 
     def git_clone(url, path = nil, branch: nil, depth: nil, user: nil)
@@ -730,7 +730,7 @@ module E2B
 
     def make_dir(path, mode: nil, user: nil)
       args = ["mkdir", "-p"]
-      args << "-m #{format('%04o', mode)}" if mode
+      args << "-m #{format("%04o", mode)}" if mode
       args.concat(Array(path).map(&:to_s))
       run_cmd(args.join(" "), user: user)
     end
@@ -777,9 +777,12 @@ module E2B
         )
       end
 
-      raise template_error("No base image specified for template", source_location: capture_source_location) unless @base_image
+      unless @base_image
+        raise template_error("No base image specified for template",
+                             source_location: capture_source_location)
+      end
 
-      dockerfile = +"FROM #{@base_image}\n"
+      dockerfile = "FROM #{@base_image}\n"
       @instructions.each do |instruction|
         case instruction[:type]
         when "RUN"
@@ -788,9 +791,9 @@ module E2B
           dockerfile << "COPY #{instruction[:args][0]} #{instruction[:args][1]}\n"
         when "ENV"
           values = instruction[:args].each_slice(2).map { |key, value| "#{key}=#{value}" }
-          dockerfile << "ENV #{values.join(' ')}\n"
+          dockerfile << "ENV #{values.join(" ")}\n"
         else
-          dockerfile << "#{instruction[:type]} #{instruction[:args].join(' ')}\n"
+          dockerfile << "#{instruction[:type]} #{instruction[:args].join(" ")}\n"
         end
       end
       dockerfile << "ENTRYPOINT #{@start_cmd}\n" if @start_cmd
@@ -913,7 +916,7 @@ module E2B
 
     def collect_files(src)
       matches = Dir.glob(src, base: @file_context_path, flags: File::FNM_DOTMATCH)
-        .reject { |entry| entry == "." || entry == ".." }
+                   .reject { |entry| [".", ".."].include?(entry) }
 
       files = []
       matches.each do |match|
@@ -991,14 +994,14 @@ module E2B
     end
 
     def normalize_ignore_pattern(pattern)
-      normalized = pattern.to_s.tr(File::SEPARATOR, "/").sub(/\A\.\//, "")
-      return "/#{normalized.sub(%r{\A/+}, '')}" if normalized.start_with?("/")
+      normalized = pattern.to_s.tr(File::SEPARATOR, "/").sub(%r{\A\./}, "")
+      return "/#{normalized.sub(%r{\A/+}, "")}" if normalized.start_with?("/")
 
       normalized.sub(%r{\A/+}, "")
     end
 
     def normalize_ignore_path(path)
-      path.to_s.tr(File::SEPARATOR, "/").sub(/\A\.\//, "").sub(%r{\A/+}, "")
+      path.to_s.tr(File::SEPARATOR, "/").sub(%r{\A\./}, "").sub(%r{\A/+}, "")
     end
 
     def build_step_origins
@@ -1013,8 +1016,8 @@ module E2B
       return [] unless File.exist?(dockerignore_path)
 
       File.readlines(dockerignore_path, chomp: true)
-        .map(&:strip)
-        .reject { |line| line.empty? || line.start_with?("#") }
+          .map(&:strip)
+          .reject { |line| line.empty? || line.start_with?("#") }
     end
 
     def read_gcp_service_account_json(path_or_content)

@@ -37,7 +37,7 @@ module E2B
     DEFAULT_MCP_TEMPLATE = "mcp-gateway"
 
     # MCP gateway port.
-    MCP_PORT = 50005
+    MCP_PORT = 50_005
 
     # @return [String] Unique sandbox ID
     attr_reader :sandbox_id
@@ -133,9 +133,7 @@ module E2B
         body[:envVars] = envs if envs
         body[:mcp] = mcp if mcp
         body[:network] = network if network
-        if body[:autoPause]
-          body[:autoResume] = { enabled: lifecycle[:auto_resume] }
-        end
+        body[:autoResume] = { enabled: lifecycle[:auto_resume] } if body[:autoPause]
 
         response = http_client.post("/sandboxes", body: body, timeout: request_timeout)
         ensure_supported_envd_version!(response, http_client)
@@ -165,7 +163,7 @@ module E2B
         http_client = build_http_client(**credentials, domain: domain)
 
         response = http_client.post("/sandboxes/#{sandbox_id}/connect",
-          body: { timeout: timeout || DEFAULT_TIMEOUT })
+                                    body: { timeout: timeout || DEFAULT_TIMEOUT })
 
         new(
           sandbox_data: response,
@@ -246,7 +244,6 @@ module E2B
       rescue E2B::NotFoundError
         true
       end
-
     end
 
     # -------------------------------------------------------------------
@@ -298,7 +295,7 @@ module E2B
       raise ArgumentError, "Timeout cannot exceed 24 hours (86400s)" if timeout > 86_400
 
       @http_client.post("/sandboxes/#{@sandbox_id}/timeout",
-        body: { timeout: timeout })
+                        body: { timeout: timeout })
 
       @end_at = Time.now + timeout
     end
@@ -542,9 +539,7 @@ module E2B
     end
 
     def build_file_url_query(path:, user:, operation:, use_signature_expiration:)
-      if use_signature_expiration && !@envd_access_token
-        raise ArgumentError, "Signature expiration can be used only when the sandbox is secured"
-      end
+      raise ArgumentError, "Signature expiration can be used only when the sandbox is secured" if use_signature_expiration && !@envd_access_token
 
       query = []
       query << ["path", path] if path

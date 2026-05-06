@@ -108,7 +108,8 @@ RSpec.describe E2B::Services::Pty do
 
         on_event.call(stdout: nil, stderr: nil, exit_code: nil, event: pty_process_start_event(77))
         release_stream.pop
-        on_event.call(stdout: nil, stderr: nil, exit_code: nil, event: pty_process_data_event(pty: "whoami\r\nuser\r\n"))
+        on_event.call(stdout: nil, stderr: nil, exit_code: nil,
+                      event: pty_process_data_event(pty: "whoami\r\nuser\r\n"))
         on_event.call(stdout: nil, stderr: nil, exit_code: 0, event: pty_process_end_event(exit_code: 0))
 
         { stdout: "", stderr: "", exit_code: 0, events: [] }

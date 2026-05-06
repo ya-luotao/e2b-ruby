@@ -35,7 +35,7 @@ module E2B
       end
 
       def self.strip_ansi_escape_codes(message)
-        message.gsub(/\e\[[0-9;?]*[ -\/]*[@-~]/, "")
+        message.gsub(%r{\e\[[0-9;?]*[ -/]*[@-~]}, "")
       end
     end
 

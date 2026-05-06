@@ -25,6 +25,7 @@ module E2B
     #   handle.kill
     class Commands < BaseService
       include LiveStreamable
+
       # Run a command in the sandbox
       #
       # @param cmd [String] Command to execute (run via /bin/bash -l -c)
@@ -93,10 +94,10 @@ module E2B
         end
 
         response = envd_rpc("process.Process", "Start",
-          body: body,
-          timeout: effective_timeout,
-          headers: headers,
-          on_event: streaming_callback)
+                            body: body,
+                            timeout: effective_timeout,
+                            headers: headers,
+                            on_event: streaming_callback)
 
         # Return CommandResult for foreground processes
         result = build_result(response)
@@ -120,16 +121,15 @@ module E2B
       # @return [Array<Hash>] List of running processes with pid, config, tag
       def list(request_timeout: nil)
         response = envd_rpc("process.Process", "List",
-          body: {},
-          timeout: request_timeout || 30)
+                            body: {},
+                            timeout: request_timeout || 30)
 
         processes = []
         events = response[:events] || []
         events.each do |event|
           next unless event.is_a?(Hash)
-          if event["processes"]
-            processes.concat(Array(event["processes"]))
-          end
+
+          processes.concat(Array(event["processes"])) if event["processes"]
         end
         processes
       end
@@ -141,12 +141,12 @@ module E2B
       # @return [Boolean] true if killed, false if not found
       def kill(pid, request_timeout: nil, headers: nil)
         envd_rpc("process.Process", "SendSignal",
-          body: {
-            process: { pid: pid },
-            signal: 9 # SIGKILL
-          },
-          headers: headers,
-          timeout: request_timeout || 30)
+                 body: {
+                   process: { pid: pid },
+                   signal: 9 # SIGKILL
+                 },
+                 headers: headers,
+                 timeout: request_timeout || 30)
         true
       rescue E2B::NotFoundError
         false
@@ -166,12 +166,12 @@ module E2B
       def send_stdin(pid, data, request_timeout: nil, headers: nil)
         encoded = Base64.strict_encode64(data.to_s)
         envd_rpc("process.Process", "SendInput",
-          body: {
-            process: { pid: pid },
-            input: { stdin: encoded }
-          },
-          headers: headers,
-          timeout: request_timeout || 30)
+                 body: {
+                   process: { pid: pid },
+                   input: { stdin: encoded }
+                 },
+                 headers: headers,
+                 timeout: request_timeout || 30)
       end
 
       # Close the stdin of a running process.
@@ -185,9 +185,9 @@ module E2B
       # @raise [E2B::E2BError] if the process is not found
       def close_stdin(pid, request_timeout: nil, headers: nil)
         envd_rpc("process.Process", "CloseStdin",
-          body: { process: { pid: pid } },
-          headers: headers,
-          timeout: request_timeout || 30)
+                 body: { process: { pid: pid } },
+                 headers: headers,
+                 timeout: request_timeout || 30)
       end
 
       # Connect to a running process
@@ -222,10 +222,9 @@ module E2B
         events = response[:events] || []
         events.each do |event|
           next unless event.is_a?(Hash) && event["event"]
+
           end_event = event["event"]["End"] || event["event"]["end"]
-          if end_event
-            error = end_event["error"] if end_event["error"] && !end_event["error"].empty?
-          end
+          error = end_event["error"] if end_event && end_event["error"] && !end_event["error"].empty?
         end
 
         CommandResult.new(

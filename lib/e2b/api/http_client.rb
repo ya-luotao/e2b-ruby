@@ -130,7 +130,11 @@ module E2B
 
       def parse_body(body, headers)
         if body.is_a?(String) && !body.empty?
-          content_type = headers["content-type"] rescue "unknown"
+          content_type = begin
+            headers["content-type"]
+          rescue StandardError
+            "unknown"
+          end
           if content_type&.include?("json") || body.start_with?("{", "[")
             begin
               return JSON.parse(body)

@@ -34,9 +34,7 @@ module E2B
       super(limit: limit, next_token: next_token) do |limit:, next_token:|
         params = { limit: limit }
         params[:nextToken] = next_token if next_token
-        if normalized_query[:metadata]
-          params[:metadata] = self.class.encode_metadata(normalized_query[:metadata])
-        end
+        params[:metadata] = self.class.encode_metadata(normalized_query[:metadata]) if normalized_query[:metadata]
         params[:state] = normalized_query[:state] if normalized_query[:state]
 
         response = http_client.get("/v2/sandboxes", params: params, detailed: true)

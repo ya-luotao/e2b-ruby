@@ -26,9 +26,7 @@ module E2B
       }
 
       on_timeout = raw_lifecycle[:on_timeout] || raw_lifecycle["on_timeout"] || "kill"
-      unless %w[kill pause].include?(on_timeout)
-        raise ArgumentError, "Lifecycle on_timeout must be 'kill' or 'pause'"
-      end
+      raise ArgumentError, "Lifecycle on_timeout must be 'kill' or 'pause'" unless %w[kill pause].include?(on_timeout)
 
       auto_resume = if raw_lifecycle.key?(:auto_resume)
                       raw_lifecycle[:auto_resume]
@@ -65,18 +63,18 @@ module E2B
       end
 
       raise TemplateError,
-        "You need to update the template to use the new SDK. You can do this by running `e2b template build` in the directory with the template."
+            "You need to update the template to use the new SDK. You can do this by running `e2b template build` in the directory with the template."
     rescue ArgumentError
       nil
     end
 
     def resolve_credentials(api_key:, access_token:)
-      resolved_api_key = api_key || E2B.configuration&.api_key || ENV["E2B_API_KEY"]
-      resolved_access_token = access_token || E2B.configuration&.access_token || ENV["E2B_ACCESS_TOKEN"]
+      resolved_api_key = api_key || E2B.configuration&.api_key || ENV.fetch("E2B_API_KEY", nil)
+      resolved_access_token = access_token || E2B.configuration&.access_token || ENV.fetch("E2B_ACCESS_TOKEN", nil)
 
       unless (resolved_api_key && !resolved_api_key.empty?) || (resolved_access_token && !resolved_access_token.empty?)
         raise ConfigurationError,
-          "E2B credentials are required. Set E2B_API_KEY or E2B_ACCESS_TOKEN, or pass api_key:/access_token:."
+              "E2B credentials are required. Set E2B_API_KEY or E2B_ACCESS_TOKEN, or pass api_key:/access_token:."
       end
 
       { api_key: resolved_api_key, access_token: resolved_access_token }

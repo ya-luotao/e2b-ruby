@@ -54,6 +54,7 @@ module E2B
     #   handle = pty.connect(pid)
     class Pty < BaseService
       include LiveStreamable
+
       # Default shell to use for PTY sessions
       DEFAULT_SHELL = "/bin/bash"
 
@@ -155,9 +156,9 @@ module E2B
       def send_stdin(pid, data, headers: nil)
         encoded = Base64.strict_encode64(data.is_a?(String) ? data : data.to_s)
         envd_rpc("process.Process", "SendInput", body: {
-          process: { pid: pid },
-          input: { pty: encoded }
-        }, headers: headers)
+                   process: { pid: pid },
+                   input: { pty: encoded }
+                 }, headers: headers)
       end
 
       # Kill a PTY process with SIGKILL.
@@ -169,9 +170,9 @@ module E2B
       #   sandbox.pty.kill(12345)
       def kill(pid, headers: nil)
         envd_rpc("process.Process", "SendSignal", body: {
-          process: { pid: pid },
-          signal: 9 # SIGKILL
-        }, headers: headers)
+                   process: { pid: pid },
+                   signal: 9 # SIGKILL
+                 }, headers: headers)
         true
       rescue E2B::E2BError
         false
@@ -191,11 +192,11 @@ module E2B
       #   sandbox.pty.resize(pid, PtySize.new(cols: 120, rows: 40))
       def resize(pid, size)
         envd_rpc("process.Process", "Update", body: {
-          process: { pid: pid },
-          pty: {
-            size: size.to_h
-          }
-        })
+                   process: { pid: pid },
+                   pty: {
+                     size: size.to_h
+                   }
+                 })
       end
 
       # Close the stdin of a PTY process.
@@ -208,8 +209,8 @@ module E2B
       # @raise [E2B::E2BError] if the process is not found
       def close_stdin(pid)
         envd_rpc("process.Process", "CloseStdin", body: {
-          process: { pid: pid }
-        })
+                   process: { pid: pid }
+                 })
       end
 
       # List running processes in the sandbox.
@@ -235,13 +236,10 @@ module E2B
         result["LANG"] = "C.UTF-8"
         result["LC_ALL"] = "C.UTF-8"
 
-        if envs.is_a?(Hash)
-          envs.each { |k, v| result[k.to_s] = v.to_s }
-        end
+        envs.each { |k, v| result[k.to_s] = v.to_s } if envs.is_a?(Hash)
 
         result
       end
-
     end
   end
 end

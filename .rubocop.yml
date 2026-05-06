@@ -1,0 +1,69 @@
+inherit_from: .rubocop_todo.yml
+
+AllCops:
+  TargetRubyVersion: 3.0
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    - 'pkg/**/*'
+    - 'examples/**/*'
+    - 'vendor/**/*'
+
+plugins:
+  - rubocop-rspec
+
+# SDK code carries long YARD comments, many-keyword signatures, and nested modules.
+# The Metrics department's defaults produce noise without actionable signal here.
+Metrics/AbcSize:
+  Enabled: false
+Metrics/BlockLength:
+  Enabled: false
+Metrics/ClassLength:
+  Enabled: false
+Metrics/CyclomaticComplexity:
+  Enabled: false
+Metrics/MethodLength:
+  Enabled: false
+Metrics/ModuleLength:
+  Enabled: false
+Metrics/PerceivedComplexity:
+  Enabled: false
+Metrics/ParameterLists:
+  Enabled: false
+
+# Each E2B service / model class is documented at the module level; per-class YARD
+# repetition is unhelpful.
+Style/Documentation:
+  Enabled: false
+
+# Match the existing codebase, which is consistently double-quoted (incl. gemspec).
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+Style/StringLiteralsInInterpolation:
+  EnforcedStyle: double_quotes
+
+# Dev deps are declared in the gemspec by design for gem distribution.
+Gemspec/DevelopmentDependencies:
+  EnforcedStyle: gemspec
+
+# RSpec cops that fire on legitimate testing patterns in this suite (long examples
+# with intentional multi-expectation flows around stubbed Faraday transports).
+RSpec/ExampleLength:
+  Enabled: false
+RSpec/MultipleExpectations:
+  Enabled: false
+RSpec/MessageSpies:
+  Enabled: false
+RSpec/StubbedMock:
+  Enabled: false
+RSpec/AnyInstance:
+  Enabled: false
+RSpec/SubjectStub:
+  Enabled: false
+RSpec/NestedGroups:
+  Max: 5
+RSpec/SpecFilePathFormat:
+  Enabled: false
+
+# Layout/LineLength is set in .rubocop_todo.yml to the current ceiling so the codebase
+# is green out of the gate. Tighten it (and shorten the offenders) over time.

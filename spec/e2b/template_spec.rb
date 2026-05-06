@@ -45,9 +45,9 @@ RSpec.describe E2B::Template do
           }
         )
         .and_return({
-          "buildID" => "bld_123",
-          "tags" => ["stable"]
-        })
+                      "buildID" => "bld_123",
+                      "tags" => ["stable"]
+                    })
 
       response = described_class.assign_tags("my-template:v1", "stable", api_key: "api-key")
 
@@ -79,12 +79,12 @@ RSpec.describe E2B::Template do
       allow(http_client).to receive(:get)
         .with("/templates/my-template%3Alatest/tags")
         .and_return([
-          {
-            "tag" => "stable",
-            "buildID" => "bld_123",
-            "createdAt" => "2026-03-13T09:00:00Z"
-          }
-        ])
+                      {
+                        "tag" => "stable",
+                        "buildID" => "bld_123",
+                        "createdAt" => "2026-03-13T09:00:00Z"
+                      }
+                    ])
 
       tags = described_class.get_tags("my-template:latest", api_key: "api-key")
 
@@ -104,29 +104,29 @@ RSpec.describe E2B::Template do
           params: { logsOffset: 2 }
         )
         .and_return({
-          "buildID" => "bld_123",
-          "templateID" => "tpl_123",
-          "status" => "building",
-          "logs" => ["raw log"],
-          "logEntries" => [
-            {
-              "timestamp" => "2026-03-13T09:00:00Z",
-              "level" => "info",
-              "message" => "Uploading"
-            }
-          ],
-          "reason" => {
-            "message" => "waiting on cache",
-            "step" => "COPY",
-            "logEntries" => [
-              {
-                "timestamp" => "2026-03-13T09:00:01Z",
-                "level" => "info",
-                "message" => "Cached"
-              }
-            ]
-          }
-        })
+                      "buildID" => "bld_123",
+                      "templateID" => "tpl_123",
+                      "status" => "building",
+                      "logs" => ["raw log"],
+                      "logEntries" => [
+                        {
+                          "timestamp" => "2026-03-13T09:00:00Z",
+                          "level" => "info",
+                          "message" => "Uploading"
+                        }
+                      ],
+                      "reason" => {
+                        "message" => "waiting on cache",
+                        "step" => "COPY",
+                        "logEntries" => [
+                          {
+                            "timestamp" => "2026-03-13T09:00:01Z",
+                            "level" => "info",
+                            "message" => "Cached"
+                          }
+                        ]
+                      }
+                    })
 
       status = described_class.get_build_status(
         { template_id: "tpl_123", build_id: "bld_123" },
@@ -210,9 +210,9 @@ RSpec.describe E2B::Template do
 
       allow(described_class).to receive(:get_build_status).and_return(error_status)
 
-      expect {
+      expect do
         described_class.wait_for_build_finish(build_info, api_key: "api-key")
-      }.to raise_error(E2B::BuildError, "Build failed")
+      end.to raise_error(E2B::BuildError, "Build failed")
     end
 
     it "maps failed build steps back to recorded template source locations" do
@@ -238,9 +238,9 @@ RSpec.describe E2B::Template do
 
       allow(described_class).to receive(:get_build_status).and_return(error_status)
 
-      expect {
+      expect do
         described_class.wait_for_build_finish(build_info_with_origins, api_key: "api-key")
-      }.to raise_error(E2B::BuildError) { |error|
+      end.to raise_error(E2B::BuildError) { |error|
         expect(error.message).to eq("COPY failed")
         expect(error.step).to eq("1")
         expect(error.source_location).to eq("spec/templates/copy.rb:2:in `copy'")
@@ -252,8 +252,8 @@ RSpec.describe E2B::Template do
   describe "ready command helpers" do
     it "builds helper commands and accepts ReadyCmd values in template start commands" do
       template = described_class.new
-        .from_base_image
-        .set_start_cmd("bundle exec ruby app.rb", E2B.wait_for_file("/tmp/ready"))
+                                .from_base_image
+                                .set_start_cmd("bundle exec ruby app.rb", E2B.wait_for_file("/tmp/ready"))
 
       expect(E2B.wait_for_port(8080).get_cmd).to eq("ss -tuln | grep :8080")
       expect(E2B.wait_for_url("http://localhost:3000/health", 204).get_cmd)
@@ -281,8 +281,10 @@ RSpec.describe E2B::Template do
       logger = E2B.default_build_logger(min_level: "warn", io: output)
 
       logger.call(E2B::Models::TemplateLogEntryStart.new(timestamp: Time.now, message: "Build started"))
-      logger.call(E2B::Models::TemplateLogEntry.new(timestamp: Time.parse("2026-03-13T09:00:00Z"), level: "info", message: "Skip"))
-      logger.call(E2B::Models::TemplateLogEntry.new(timestamp: Time.parse("2026-03-13T09:00:01Z"), level: "warn", message: "Warn"))
+      logger.call(E2B::Models::TemplateLogEntry.new(timestamp: Time.parse("2026-03-13T09:00:00Z"), level: "info",
+                                                    message: "Skip"))
+      logger.call(E2B::Models::TemplateLogEntry.new(timestamp: Time.parse("2026-03-13T09:00:01Z"), level: "warn",
+                                                    message: "Warn"))
       logger.call(E2B::Models::TemplateLogEntryEnd.new(timestamp: Time.now, message: "Build finished"))
 
       expect(output.string).to include("WARN")
@@ -302,13 +304,13 @@ RSpec.describe E2B::Template do
   describe "builder serialization" do
     it "serializes image-based templates to hashes and Dockerfiles" do
       template = described_class.new
-        .from_python_image("3.12")
-        .copy("app.rb", "/app/")
-        .run_cmd("bundle install", user: "root")
-        .set_workdir("/app")
-        .set_user("app")
-        .set_envs("RACK_ENV" => "production", "PORT" => 3000)
-        .set_start_cmd("bundle exec ruby app.rb", "test -f /tmp/ready")
+                                .from_python_image("3.12")
+                                .copy("app.rb", "/app/")
+                                .run_cmd("bundle install", user: "root")
+                                .set_workdir("/app")
+                                .set_user("app")
+                                .set_envs("RACK_ENV" => "production", "PORT" => 3000)
+                                .set_start_cmd("bundle exec ruby app.rb", "test -f /tmp/ready")
 
       expect(template.to_h).to eq(
         fromImage: "python:3.12",
@@ -320,7 +322,7 @@ RSpec.describe E2B::Template do
           { type: "RUN", args: ["bundle install", "root"], force: false },
           { type: "WORKDIR", args: ["/app"], force: false },
           { type: "USER", args: ["app"], force: false },
-          { type: "ENV", args: ["RACK_ENV", "production", "PORT", "3000"], force: false }
+          { type: "ENV", args: %w[RACK_ENV production PORT 3000], force: false }
         ]
       )
 
@@ -337,9 +339,9 @@ RSpec.describe E2B::Template do
 
     it "marks subsequent steps as forced after skip_cache" do
       template = described_class.new
-        .skip_cache
-        .from_base_image
-        .run_cmd("echo hi")
+                                .skip_cache
+                                .from_base_image
+                                .run_cmd("echo hi")
 
       expect(template.to_h).to eq(
         fromImage: "e2bdev/base",
@@ -352,20 +354,21 @@ RSpec.describe E2B::Template do
 
     it "joins array commands into a single RUN step" do
       template = described_class.new
-        .from_base_image
-        .run_cmd(["apt-get update", "apt-get install -y git"], user: "root")
+                                .from_base_image
+                                .run_cmd(["apt-get update", "apt-get install -y git"], user: "root")
 
       expect(template.to_h[:steps]).to eq([
-        { type: "RUN", args: ["apt-get update && apt-get install -y git", "root"], force: false }
-      ])
+                                            { type: "RUN", args: ["apt-get update && apt-get install -y git", "root"],
+                                              force: false }
+                                          ])
     end
 
     it "computes file hashes for copy steps" do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
         template = described_class.new(file_context_path: dir)
-          .from_base_image
-          .copy("app.rb", "/app/")
+                                  .from_base_image
+                                  .copy("app.rb", "/app/")
 
         payload = template.to_h(compute_hashes: true)
 
@@ -377,8 +380,8 @@ RSpec.describe E2B::Template do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
         template = described_class.new(file_context_path: dir)
-          .from_base_image
-          .copy("app.rb", "/app/")
+                                  .from_base_image
+                                  .copy("app.rb", "/app/")
 
         json = described_class.to_json(template)
 
@@ -389,9 +392,9 @@ RSpec.describe E2B::Template do
     it "rejects copy sources that escape the template context" do
       template = described_class.new
 
-      expect {
+      expect do
         template.copy("../secrets.txt", "/app/")
-      }.to raise_error(E2B::TemplateError) { |error|
+      end.to raise_error(E2B::TemplateError) { |error|
         expect(error.message).to match(/path escapes the context directory/)
         expect(error.source_location).to include(__FILE__)
         expect(error.backtrace).to eq([error.source_location])
@@ -401,9 +404,9 @@ RSpec.describe E2B::Template do
     it "refuses to convert templates based on other templates to Dockerfiles" do
       template = described_class.new.from_template("base-template")
 
-      expect {
+      expect do
         template.to_dockerfile
-      }.to raise_error(E2B::TemplateError) { |error|
+      end.to raise_error(E2B::TemplateError) { |error|
         expect(error.message).to match(/Cannot convert template built from another template to Dockerfile/)
         expect(error.source_location).to include(__FILE__)
       }
@@ -411,24 +414,30 @@ RSpec.describe E2B::Template do
 
     it "serializes copy_items and filesystem mutation helpers" do
       template = described_class.new
-        .from_base_image
-        .copy_items([
-          { src: "app.rb", dest: "/app/" },
-          { "src" => "config.yml", "dest" => "/etc/app/", "mode" => 0o644, "user" => "root" }
-        ])
-        .remove(["/tmp/cache", "/tmp/build"], recursive: true, force: true, user: "root")
-        .rename("/etc/app/config.yml", "/etc/app/settings.yml", force: true)
-        .make_dir(["/app/logs", "/app/tmp"], mode: 0o755)
-        .make_symlink("/usr/bin/python3", "/usr/bin/python", force: true, user: "root")
+                                .from_base_image
+                                .copy_items([
+                                              { src: "app.rb", dest: "/app/" },
+                                              { "src" => "config.yml", "dest" => "/etc/app/", "mode" => 0o644,
+                                                "user" => "root" }
+                                            ])
+                                .remove(["/tmp/cache", "/tmp/build"], recursive: true, force: true, user: "root")
+                                .rename("/etc/app/config.yml", "/etc/app/settings.yml", force: true)
+                                .make_dir(["/app/logs", "/app/tmp"], mode: 0o755)
+                                .make_symlink("/usr/bin/python3", "/usr/bin/python", force: true, user: "root")
 
       expect(template.to_h[:steps]).to eq([
-        { type: "COPY", args: ["app.rb", "/app/", "", ""], force: false },
-        { type: "COPY", args: ["config.yml", "/etc/app/", "root", "0644"], force: false },
-        { type: "RUN", args: ["rm -r -f /tmp/cache /tmp/build", "root"], force: false },
-        { type: "RUN", args: ["mv -f /etc/app/config.yml /etc/app/settings.yml", ""], force: false },
-        { type: "RUN", args: ["mkdir -p -m 0755 /app/logs /app/tmp", ""], force: false },
-        { type: "RUN", args: ["ln -s -f /usr/bin/python3 /usr/bin/python", "root"], force: false }
-      ])
+                                            { type: "COPY", args: ["app.rb", "/app/", "", ""], force: false },
+                                            { type: "COPY", args: ["config.yml", "/etc/app/", "root", "0644"],
+                                              force: false },
+                                            { type: "RUN", args: ["rm -r -f /tmp/cache /tmp/build", "root"],
+                                              force: false },
+                                            { type: "RUN",
+                                              args: ["mv -f /etc/app/config.yml /etc/app/settings.yml", ""], force: false },
+                                            { type: "RUN", args: ["mkdir -p -m 0755 /app/logs /app/tmp", ""],
+                                              force: false },
+                                            { type: "RUN", args: ["ln -s -f /usr/bin/python3 /usr/bin/python", "root"],
+                                              force: false }
+                                          ])
     end
 
     it "serializes AWS and GCP registry sources" do
@@ -436,14 +445,14 @@ RSpec.describe E2B::Template do
         File.write(File.join(dir, "gcp.json"), "{\"client_email\":\"svc@example.test\"}")
 
         aws_template = described_class.new
-          .from_aws_registry(
-            "123456789.dkr.ecr.us-west-2.amazonaws.com/app:latest",
-            access_key_id: "AKIA123",
-            secret_access_key: "secret",
-            region: "us-west-2"
-          )
+                                      .from_aws_registry(
+                                        "123456789.dkr.ecr.us-west-2.amazonaws.com/app:latest",
+                                        access_key_id: "AKIA123",
+                                        secret_access_key: "secret",
+                                        region: "us-west-2"
+                                      )
         gcp_template = described_class.new(file_context_path: dir)
-          .from_gcp_registry("gcr.io/project/app:latest", service_account_json: "gcp.json")
+                                      .from_gcp_registry("gcr.io/project/app:latest", service_account_json: "gcp.json")
 
         expect(aws_template.to_h).to include(
           fromImage: "123456789.dkr.ecr.us-west-2.amazonaws.com/app:latest",
@@ -466,43 +475,44 @@ RSpec.describe E2B::Template do
 
     it "serializes package installers, git clone, and leaves empty env hashes as no-ops" do
       template = described_class.new
-        .from_base_image
-        .set_envs({})
-        .pip_install(["numpy", "pandas"], g: false)
-        .npm_install("typescript", g: true)
-        .bun_install("tsx", dev: true)
-        .apt_install(%w[git curl], no_install_recommends: true)
-        .git_clone("https://github.com/e2b-dev/E2B.git", "/app/repo", branch: "main", depth: 1, user: "root")
+                                .from_base_image
+                                .set_envs({})
+                                .pip_install(%w[numpy pandas], g: false)
+                                .npm_install("typescript", g: true)
+                                .bun_install("tsx", dev: true)
+                                .apt_install(%w[git curl], no_install_recommends: true)
+                                .git_clone("https://github.com/e2b-dev/E2B.git", "/app/repo", branch: "main", depth: 1, user: "root")
 
       expect(template.to_h[:steps]).to eq([
-        { type: "RUN", args: ["pip install --user numpy pandas", ""], force: false },
-        { type: "RUN", args: ["npm install -g typescript", "root"], force: false },
-        { type: "RUN", args: ["bun install --dev tsx", ""], force: false },
-        {
-          type: "RUN",
-          args: [
-            "apt-get update && DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y --no-install-recommends git curl",
-            "root"
-          ],
-          force: false
-        },
-        {
-          type: "RUN",
-          args: [
-            "git clone https://github.com/e2b-dev/E2B.git --branch main --single-branch --depth 1 /app/repo",
-            "root"
-          ],
-          force: false
-        }
-      ])
+                                            { type: "RUN", args: ["pip install --user numpy pandas", ""],
+                                              force: false },
+                                            { type: "RUN", args: ["npm install -g typescript", "root"], force: false },
+                                            { type: "RUN", args: ["bun install --dev tsx", ""], force: false },
+                                            {
+                                              type: "RUN",
+                                              args: [
+                                                "apt-get update && DEBIAN_FRONTEND=noninteractive DEBCONF_NOWARNINGS=yes apt-get install -y --no-install-recommends git curl",
+                                                "root"
+                                              ],
+                                              force: false
+                                            },
+                                            {
+                                              type: "RUN",
+                                              args: [
+                                                "git clone https://github.com/e2b-dev/E2B.git --branch main --single-branch --depth 1 /app/repo",
+                                                "root"
+                                              ],
+                                              force: false
+                                            }
+                                          ])
     end
 
     it "guards MCP server helpers to the mcp-gateway template" do
       template = described_class.new.from_base_image
 
-      expect {
+      expect do
         template.add_mcp_server("exa")
-      }.to raise_error(E2B::BuildError) { |error|
+      end.to raise_error(E2B::BuildError) { |error|
         expect(error.message).to match(/MCP servers can only be added to mcp-gateway template/)
         expect(error.source_location).to include(__FILE__)
       }
@@ -510,12 +520,12 @@ RSpec.describe E2B::Template do
 
     it "serializes MCP and devcontainer helpers on the matching templates" do
       mcp_template = described_class.new
-        .from_template("mcp-gateway")
-        .add_mcp_server(%w[exa brave])
+                                    .from_template("mcp-gateway")
+                                    .add_mcp_server(%w[exa brave])
       devcontainer_template = described_class.new
-        .from_template("devcontainer")
-        .beta_dev_container_prebuild("/workspace/project")
-        .beta_set_devcontainer_start("/workspace/project")
+                                             .from_template("devcontainer")
+                                             .beta_dev_container_prebuild("/workspace/project")
+                                             .beta_set_devcontainer_start("/workspace/project")
 
       expect(mcp_template.to_h).to include(
         fromTemplate: "mcp-gateway",
@@ -529,8 +539,9 @@ RSpec.describe E2B::Template do
         startCmd: "sudo devcontainer up --workspace-folder /workspace/project && sudo /prepare-exec.sh /workspace/project | sudo tee /devcontainer.sh > /dev/null && sudo chmod +x /devcontainer.sh && sudo touch /devcontainer.up"
       )
       expect(devcontainer_template.to_h[:steps]).to eq([
-        { type: "RUN", args: ["devcontainer build --workspace-folder /workspace/project", "root"], force: false }
-      ])
+                                                         { type: "RUN",
+                                                           args: ["devcontainer build --workspace-folder /workspace/project", "root"], force: false }
+                                                       ])
     end
   end
 
@@ -548,14 +559,14 @@ RSpec.describe E2B::Template do
         template = described_class.new(file_context_path: dir, file_ignore_patterns: ["**/ui/**"])
 
         expect(template.send(:collect_files, "src").map { |file| file.delete_prefix("#{dir}/") }).to eq([
-          "src",
-          "src/components",
-          "src/components/forms",
-          "src/components/forms/Input.tsx",
-          "src/index.ts",
-          "src/utils",
-          "src/utils/helper.ts"
-        ])
+                                                                                                          "src",
+                                                                                                          "src/components",
+                                                                                                          "src/components/forms",
+                                                                                                          "src/components/forms/Input.tsx",
+                                                                                                          "src/index.ts",
+                                                                                                          "src/utils",
+                                                                                                          "src/utils/helper.ts"
+                                                                                                        ])
       end
     end
 
@@ -580,9 +591,9 @@ RSpec.describe E2B::Template do
         template = described_class.new(file_context_path: dir, file_ignore_patterns: ["/dist/**"])
 
         expect(template.send(:collect_files, "*").map { |file| file.delete_prefix("#{dir}/") }).to eq([
-          "app.js",
-          "dist"
-        ])
+                                                                                                        "app.js",
+                                                                                                        "dist"
+                                                                                                      ])
       end
     end
 
@@ -600,11 +611,11 @@ RSpec.describe E2B::Template do
         )
 
         expect(template.send(:collect_files, "src").map { |file| file.delete_prefix("#{dir}/") }).to eq([
-          "src",
-          "src/components",
-          "src/components/Button.tsx",
-          "src/index.ts"
-        ])
+                                                                                                          "src",
+                                                                                                          "src/components",
+                                                                                                          "src/components/Button.tsx",
+                                                                                                          "src/index.ts"
+                                                                                                        ])
       end
     end
   end
@@ -614,8 +625,8 @@ RSpec.describe E2B::Template do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
         template = described_class.new(file_context_path: dir)
-          .from_base_image
-          .copy("app.rb", "/app/")
+                                  .from_base_image
+                                  .copy("app.rb", "/app/")
 
         payload = template.to_h(compute_hashes: true)
         files_hash = payload[:steps].first[:filesHash]
@@ -632,16 +643,16 @@ RSpec.describe E2B::Template do
             }
           )
           .and_return({
-            "templateID" => "tpl_123",
-            "buildID" => "bld_123",
-            "tags" => ["stable"]
-          })
+                        "templateID" => "tpl_123",
+                        "buildID" => "bld_123",
+                        "tags" => ["stable"]
+                      })
         allow(http_client).to receive(:get)
           .with("/templates/tpl_123/files/#{files_hash}")
           .and_return({
-            "present" => false,
-            "url" => "https://upload.example.test/template"
-          })
+                        "present" => false,
+                        "url" => "https://upload.example.test/template"
+                      })
         allow(described_class).to receive(:upload_file)
         expect(http_client).to receive(:post)
           .with("/v2/templates/tpl_123/builds/bld_123", body: payload)
@@ -690,10 +701,10 @@ RSpec.describe E2B::Template do
           }
         )
         .and_return({
-          "templateID" => "tpl_123",
-          "buildID" => "bld_123",
-          "tags" => []
-        })
+                      "templateID" => "tpl_123",
+                      "buildID" => "bld_123",
+                      "tags" => []
+                    })
       expect(http_client).to receive(:post)
         .with("/v2/templates/tpl_123/builds/bld_123", body: kind_of(Hash))
 
@@ -711,8 +722,8 @@ RSpec.describe E2B::Template do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
         template = described_class.new(file_context_path: dir)
-          .from_base_image
-          .copy("app.rb", "/app/")
+                                  .from_base_image
+                                  .copy("app.rb", "/app/")
 
         payload = template.to_h(compute_hashes: true)
         files_hash = payload[:steps].first[:filesHash]
@@ -728,21 +739,21 @@ RSpec.describe E2B::Template do
             }
           )
           .and_return({
-            "templateID" => "tpl_123",
-            "buildID" => "bld_123",
-            "tags" => []
-          })
+                        "templateID" => "tpl_123",
+                        "buildID" => "bld_123",
+                        "tags" => []
+                      })
         allow(http_client).to receive(:get)
           .with("/templates/tpl_123/files/#{files_hash}")
           .and_raise(E2B::AuthenticationError.new("forbidden", status_code: 403))
 
-        expect {
+        expect do
           described_class.build_in_background(
             template,
             name: "my-template",
             api_key: "api-key"
           )
-        }.to raise_error(E2B::FileUploadError) { |error|
+        end.to raise_error(E2B::FileUploadError) { |error|
           expect(error.message).to eq("forbidden")
           expect(error.source_location).to include(__FILE__)
           expect(error.status_code).to eq(403)
@@ -754,8 +765,8 @@ RSpec.describe E2B::Template do
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
         template = described_class.new(file_context_path: dir)
-          .from_base_image
-          .copy("app.rb", "/app/")
+                                  .from_base_image
+                                  .copy("app.rb", "/app/")
 
         archive = described_class.send(:build_tar_archive, template, "app.rb", resolve_symlinks: false)
         tar_data = Zlib::GzipReader.new(StringIO.new(archive)).read
@@ -791,7 +802,7 @@ RSpec.describe E2B::Template do
           { type: "USER", args: ["root"], force: false },
           { type: "WORKDIR", args: ["/"], force: false },
           { type: "ENV", args: ["APP_ENV", ""], force: false },
-          { type: "ENV", args: ["PORT", "3000", "APP_ENV", "production"], force: false },
+          { type: "ENV", args: %w[PORT 3000 APP_ENV production], force: false },
           { type: "COPY", args: ["app.py", "/app/app.py", "root:root", ""], force: false },
           { type: "RUN", args: ["pip install -r requirements.txt && python -m compileall /app", ""], force: false },
           { type: "USER", args: ["user"], force: false },
@@ -834,9 +845,9 @@ RSpec.describe E2B::Template do
         FROM nginx:stable
       DOCKERFILE
 
-      expect {
+      expect do
         described_class.new.from_dockerfile(dockerfile)
-      }.to raise_error(E2B::TemplateError) { |error|
+      end.to raise_error(E2B::TemplateError) { |error|
         expect(error.message).to match(/Multi-stage Dockerfiles are not supported/)
         expect(error.source_location).to include(__FILE__)
       }
@@ -889,7 +900,7 @@ RSpec.describe E2B::Template do
 
       result = described_class.build(
         described_class.new.from_base_image,
-        **{ alias: "my-template", api_key: "api-key" }
+        alias: "my-template", api_key: "api-key"
       )
 
       expect(result).to eq(build_info)

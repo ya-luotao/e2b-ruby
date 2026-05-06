@@ -17,7 +17,7 @@ Run these in one batch and abort if any fail:
 1. Current branch is `main` (`git rev-parse --abbrev-ref HEAD`).
 2. Working tree is clean (`git status --porcelain` returns empty).
 3. Local is synced with origin (`git fetch && git status -sb` shows `## main...origin/main` with no `ahead`/`behind`).
-4. Last run of `bundle exec rake` is green — run it now and abort on failure. (`rake` here is spec-only; there is no rubocop task.)
+4. Last run of `bundle exec rake` is green — run it now and abort on failure. (`rake` runs spec + rubocop; both must be clean.)
 
 If the user passed `--dry-run`, do everything below **except** git commit, push, tag, and `gh release create`. Print the planned diff instead.
 

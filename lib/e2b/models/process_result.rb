@@ -55,21 +55,21 @@ module E2B
             next unless event.is_a?(Hash)
 
             # Handle nested event structure
-            if event["event"]
-              ev = event["event"]
-              if ev["Stdout"]
-                stdout += decode_base64_safe(ev["Stdout"]["data"])
-              elsif ev["stdout"]
-                stdout += decode_base64_safe(ev["stdout"]["data"])
-              elsif ev["Stderr"]
-                stderr += decode_base64_safe(ev["Stderr"]["data"])
-              elsif ev["stderr"]
-                stderr += decode_base64_safe(ev["stderr"]["data"])
-              elsif ev["Exit"]
-                exit_code = ev["Exit"]["exitCode"] || ev["Exit"]["exit_code"] || exit_code
-              elsif ev["exit"]
-                exit_code = ev["exit"]["exitCode"] || ev["exit"]["exit_code"] || exit_code
-              end
+            next unless event["event"]
+
+            ev = event["event"]
+            if ev["Stdout"]
+              stdout += decode_base64_safe(ev["Stdout"]["data"])
+            elsif ev["stdout"]
+              stdout += decode_base64_safe(ev["stdout"]["data"])
+            elsif ev["Stderr"]
+              stderr += decode_base64_safe(ev["Stderr"]["data"])
+            elsif ev["stderr"]
+              stderr += decode_base64_safe(ev["stderr"]["data"])
+            elsif ev["Exit"]
+              exit_code = ev["Exit"]["exitCode"] || ev["Exit"]["exit_code"] || exit_code
+            elsif ev["exit"]
+              exit_code = ev["exit"]["exitCode"] || ev["exit"]["exit_code"] || exit_code
             end
           end
         end
@@ -89,9 +89,9 @@ module E2B
 
         str = value.to_s
         if str =~ /exit status (\d+)/i
-          $1.to_i
+          ::Regexp.last_match(1).to_i
         elsif str =~ /(\d+)/
-          $1.to_i
+          ::Regexp.last_match(1).to_i
         else
           str.include?("0") ? 0 : 1
         end

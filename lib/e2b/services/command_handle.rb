@@ -189,9 +189,7 @@ module E2B
       # @raise [CommandExitError] if exit code is non-zero
       def wait(on_stdout: nil, on_stderr: nil, on_pty: nil)
         consume_events(on_stdout: on_stdout, on_stderr: on_stderr, on_pty: on_pty)
-        unless @disconnected || completed?
-          raise E2BError, "Command ended without an end event"
-        end
+        raise E2BError, "Command ended without an end event" unless @disconnected || completed?
 
         build_result.tap do |cmd_result|
           unless cmd_result.success?
@@ -269,15 +267,9 @@ module E2B
         return if @finished
 
         each do |stdout_chunk, stderr_chunk, pty_chunk|
-          if stdout_chunk
-            on_stdout&.call(stdout_chunk)
-          end
-          if stderr_chunk
-            on_stderr&.call(stderr_chunk)
-          end
-          if pty_chunk
-            on_pty&.call(pty_chunk)
-          end
+          on_stdout&.call(stdout_chunk) if stdout_chunk
+          on_stderr&.call(stderr_chunk) if stderr_chunk
+          on_pty&.call(pty_chunk) if pty_chunk
         end
 
         @finished = true
@@ -306,7 +298,7 @@ module E2B
       #
       # @yield [stdout, stderr, pty]
       # @return [void]
-      def iterate_materialized_events
+      def iterate_materialized_events(&block)
         events = result_value(:events) || []
         while @materialized_event_index < events.length
           break if @disconnected
@@ -314,9 +306,7 @@ module E2B
           event_hash = events[@materialized_event_index]
           @materialized_event_index += 1
 
-          process_message(event_hash) do |stdout_chunk, stderr_chunk, pty_chunk|
-            yield stdout_chunk, stderr_chunk, pty_chunk
-          end
+          process_message(event_hash, &block)
         end
       end
 
@@ -327,14 +317,12 @@ module E2B
       #
       # @yield [stdout, stderr, pty]
       # @return [void]
-      def iterate_streaming_events
+      def iterate_streaming_events(&block)
         catch(:stop_iteration) do
           @events_proc.call do |event_hash|
             throw :stop_iteration if @disconnected
 
-            process_message(event_hash) do |stdout_chunk, stderr_chunk, pty_chunk|
-              yield stdout_chunk, stderr_chunk, pty_chunk
-            end
+            process_message(event_hash, &block)
           end
         end
       end
@@ -353,11 +341,11 @@ module E2B
       # @param message [Hash] A raw stream message
       # @yield [stdout, stderr, pty]
       # @return [void]
-      def process_message(message)
+      def process_message(message, &block)
         return unless message.is_a?(Hash)
 
         event = message["event"]
-        process_event(event) { |stdout_chunk, stderr_chunk, pty_chunk| yield stdout_chunk, stderr_chunk, pty_chunk } if event.is_a?(Hash)
+        process_event(event, &block) if event.is_a?(Hash)
 
         if event.nil?
           stdout_chunk = EnvdBase64.decode_process_output(message["stdout"])

@@ -87,8 +87,8 @@ module E2B
       sandbox_timeout_ms: DEFAULT_SANDBOX_TIMEOUT_MS,
       debug: false
     )
-      @api_key = api_key || ENV["E2B_API_KEY"]
-      @access_token = access_token || ENV["E2B_ACCESS_TOKEN"]
+      @api_key = api_key || ENV.fetch("E2B_API_KEY", nil)
+      @access_token = access_token || ENV.fetch("E2B_ACCESS_TOKEN", nil)
       @domain = domain || ENV["E2B_DOMAIN"] || DEFAULT_DOMAIN
       @debug = debug || ENV["E2B_DEBUG"]&.downcase == "true"
       @api_url = api_url || ENV["E2B_API_URL"] || self.class.default_api_url(@domain, debug: @debug)
@@ -103,10 +103,10 @@ module E2B
     #
     # @raise [ConfigurationError] If API key is missing
     def validate!
-      if (@api_key.nil? || @api_key.empty?) && (@access_token.nil? || @access_token.empty?)
-        raise ConfigurationError,
-          "E2B API key is required. Set E2B_API_KEY environment variable or pass api_key option."
-      end
+      return unless (@api_key.nil? || @api_key.empty?) && (@access_token.nil? || @access_token.empty?)
+
+      raise ConfigurationError,
+            "E2B API key is required. Set E2B_API_KEY environment variable or pass api_key option."
     end
 
     # Check if configuration is valid

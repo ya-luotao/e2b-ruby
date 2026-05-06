@@ -121,9 +121,9 @@ RSpec.describe E2B::Client do
           timeout: 60
         )
         .and_return({
-          "sandboxID" => "sbx_123",
-          "trafficAccessToken" => "traffic-token"
-        })
+                      "sandboxID" => "sbx_123",
+                      "trafficAccessToken" => "traffic-token"
+                    })
 
       client = described_class.new(api_key: "api-key")
       sandbox = client.create(
