@@ -113,9 +113,12 @@ sandbox = client.create(template: "base")
 
 ### Sandbox (class methods)
 
+> Every class method below also accepts `access_token:` (alternative to `api_key:`)
+> and `domain:` (override the default).
+
 | Method | Description |
 |--------|-------------|
-| `Sandbox.create(template:, timeout:, metadata:, envs:, secure:, allow_internet_access:, mcp:, api_key:)` | Create a new sandbox |
+| `Sandbox.create(template:, timeout:, metadata:, envs:, secure:, allow_internet_access:, network:, lifecycle:, auto_pause:, mcp:, api_key:, request_timeout:)` | Create a new sandbox. `lifecycle:` / `auto_pause:` control what happens at timeout (kill vs pause); `network:` configures egress rules; `request_timeout:` is the create-call HTTP timeout (default 120s). |
 | `Sandbox.connect(sandbox_id, timeout:, api_key:)` | Connect to an existing sandbox |
 | `Sandbox.list(query:, limit:, next_token:, api_key:)` | List running sandboxes (returns `SandboxPaginator`) |
 | `Sandbox.kill(sandbox_id, api_key:)` | Kill a sandbox by ID (idempotent) |
@@ -135,7 +138,7 @@ sandbox = client.create(template: "base")
 | `sandbox.set_timeout(seconds)` | Extend sandbox lifetime |
 | `sandbox.time_remaining` | Seconds until timeout (0 if expired/unknown) |
 | `sandbox.get_host(port)` / `sandbox.get_url(port)` | Get host string / full URL for a port |
-| `sandbox.download_url(path, user:)` / `sandbox.upload_url(path, user:)` | Pre-signed file URLs |
+| `sandbox.download_url(path, user:, use_signature_expiration:)` / `sandbox.upload_url(path = nil, user:, use_signature_expiration:)` | Pre-signed file URLs (`use_signature_expiration:` overrides the default URL TTL) |
 | `sandbox.pause` / `sandbox.resume(timeout:)` | Pause/resume sandbox |
 | `sandbox.create_snapshot` | Create sandbox snapshot (returns `SnapshotInfo`) |
 | `sandbox.list_snapshots(limit:, next_token:)` | List snapshots from this sandbox |
@@ -157,6 +160,9 @@ sandbox = client.create(template: "base")
 
 ### Filesystem (`sandbox.files`)
 
+> Every filesystem method also accepts `user:` (default `"user"`, pass `"root"` for
+> root-owned paths) and `request_timeout:` (per-call HTTP timeout in seconds).
+
 | Method | Description |
 |--------|-------------|
 | `read(path, format:)` | Read file content (`format:` `"text"` (default), `"bytes"`, or `"stream"`) |
@@ -174,8 +180,8 @@ sandbox = client.create(template: "base")
 
 | Method | Description |
 |--------|-------------|
-| `create(size:, cwd:, envs:)` | Create PTY session (returns `CommandHandle`) |
-| `connect(pid)` | Connect to existing PTY |
+| `create(size:, user:, cwd:, envs:)` | Create PTY session (returns `CommandHandle`) |
+| `connect(pid, timeout:)` | Connect to existing PTY (`timeout:` defaults to 60s) |
 | `send_stdin(pid, data)` | Send input to PTY |
 | `kill(pid)` | Kill PTY process |
 | `resize(pid, size)` | Resize terminal |
@@ -191,7 +197,7 @@ sandbox = client.create(template: "base")
 | `status(path)` | Get repo status (returns `GitStatus`) |
 | `branches(path)` | List branches (returns `GitBranches`) |
 | `add(path, files:, all:)` | Stage files |
-| `commit(path, message, author_name:, author_email:)` | Create commit |
+| `commit(path, message, author_name:, author_email:, allow_empty:)` | Create commit (`allow_empty: true` allows empty commits) |
 | `push(path, remote:, branch:, username:, password:)` | Push to remote |
 | `pull(path, remote:, branch:, username:, password:)` | Pull from remote |
 | `create_branch` / `checkout_branch` / `delete_branch` | Branch management |
@@ -199,7 +205,7 @@ sandbox = client.create(template: "base")
 | `reset(path, mode:, target:)` / `restore(path, paths)` | Reset/restore changes |
 | `set_config` / `get_config` | Git configuration |
 | `configure_user(name, email)` | Set user name/email |
-| `dangerously_authenticate(username, password)` | Store credentials globally |
+| `dangerously_authenticate(username, password, host:, protocol:)` | Store credentials globally (`host:` defaults to `github.com`, `protocol:` to `https`) |
 
 ### Templates (`E2B::Template`)
 
