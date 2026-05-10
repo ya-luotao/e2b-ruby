@@ -4,6 +4,14 @@ All notable changes to the E2B Ruby SDK will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Minimum Ruby version raised to 3.1** (was 3.0). Ruby 3.0 reached end-of-life in March 2024 and is no longer covered by upstream security patches. The CI matrix now spans 3.1, 3.2, 3.3, 3.4, 3.5, plus Ruby `head` (4.0 development branch, allowed to fail) as an early-warning smoke test.
+
+### Internal
+
+- Adopted Ruby 3.1 anonymous block forwarding (`&` instead of `&block`) in `Services::CommandHandle` after the `TargetRubyVersion` bump unlocked the relevant cops.
+
 ## [0.3.5] - 2026-05-10
 
 ### Fixed

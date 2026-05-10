@@ -243,15 +243,15 @@ module E2B
       # @yieldparam stderr [String, nil] Stderr data, or nil
       # @yieldparam pty [String, nil] PTY data, or nil
       # @return [void]
-      def each(&block)
+      def each(&)
         return enum_for(:each) unless block_given?
 
         if @result
           # Iterate over pre-materialized events
-          iterate_materialized_events(&block)
+          iterate_materialized_events(&)
         elsif @events_proc
           # Iterate over streaming events
-          iterate_streaming_events(&block)
+          iterate_streaming_events(&)
         end
       end
 
@@ -298,7 +298,7 @@ module E2B
       #
       # @yield [stdout, stderr, pty]
       # @return [void]
-      def iterate_materialized_events(&block)
+      def iterate_materialized_events(&)
         events = result_value(:events) || []
         while @materialized_event_index < events.length
           break if @disconnected
@@ -306,7 +306,7 @@ module E2B
           event_hash = events[@materialized_event_index]
           @materialized_event_index += 1
 
-          process_message(event_hash, &block)
+          process_message(event_hash, &)
         end
       end
 
@@ -341,11 +341,11 @@ module E2B
       # @param message [Hash] A raw stream message
       # @yield [stdout, stderr, pty]
       # @return [void]
-      def process_message(message, &block)
+      def process_message(message, &)
         return unless message.is_a?(Hash)
 
         event = message["event"]
-        process_event(event, &block) if event.is_a?(Hash)
+        process_event(event, &) if event.is_a?(Hash)
 
         if event.nil?
           stdout_chunk = EnvdBase64.decode_process_output(message["stdout"])
