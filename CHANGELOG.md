@@ -4,9 +4,11 @@ All notable changes to the E2B Ruby SDK will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-11
+
 ### Changed
 
-- **Minimum Ruby version raised to 3.1** (was 3.0). Ruby 3.0 reached end-of-life in March 2024 and is no longer covered by upstream security patches. The CI matrix now spans 3.1, 3.2, 3.3, 3.4, 3.5, plus Ruby `head` (4.0 development branch, allowed to fail) as an early-warning smoke test.
+- **Minimum Ruby version raised to 3.1** (was 3.0). Ruby 3.0 reached end-of-life in March 2024 and is no longer covered by upstream security patches. `gem install e2b -v 0.4.0` will refuse to install on Ruby 3.0; pin to `~> 0.3.5` if you still need 3.0 support. The CI matrix now spans 3.1, 3.2, 3.3, 3.4, 3.5, plus Ruby `head` (4.0 development branch, allowed to fail) as an early-warning smoke test (#7).
 
 ### Internal
 
