@@ -2,6 +2,18 @@
 
 All notable changes to the E2B Ruby SDK will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **`process.Process/Start` streaming RPC is no longer retried** under any condition. The previous policy aborted on retry only after the first event had been delivered; a transport blip before the first byte could still spawn a duplicate process (e.g. `git clone` failing with "destination already exists" because attempt #1 created the directory before the connection dropped). `BaseService#handle_streaming_rpc` now sets `max_retries: 0` whenever the path ends in `/Start`. ([#128b1bc](https://github.com/ya-luotao/e2b-ruby/commit/128b1bc))
+
+### Internal
+
+- **CI**: `bundle exec rake` (rspec + rubocop) now runs on every push/PR via GitHub Actions across Ruby 3.0/3.1/3.2/3.3.
+- **Test coverage**: new `spec/e2b/services/git_spec.rb` locks down credential URL handling, status parsing, branch parsing, and auth-error mapping for `E2B::Services::Git`.
+- **Tooling**: removed unused `vcr` development dependency from `Gemfile` (no cassettes; spec suite is WebMock-only).
+
 ## [0.3.4] - 2026-05-05
 
 ### Added
