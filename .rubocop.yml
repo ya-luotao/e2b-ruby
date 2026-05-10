@@ -8,6 +8,7 @@ AllCops:
     - 'pkg/**/*'
     - 'examples/**/*'
     - 'vendor/**/*'
+    - '.github/**/*'
 
 plugins:
   - rubocop-rspec
