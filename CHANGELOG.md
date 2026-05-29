@@ -4,6 +4,12 @@ All notable changes to the E2B Ruby SDK will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-29
+
+### Fixed
+
+- **`Template.build` no longer fails the file-upload step with `403 SignatureDoesNotMatch`.** `Template#upload_file` now sends `Content-Type: ""` on the PUT to E2B's presigned upload URL. Those URLs are GCS V2 signed over an *empty* Content-Type, so the previous `application/octet-stream` header — and even omitting the header, which makes Faraday default to `application/x-www-form-urlencoded` — produced a signature mismatch and broke every custom-template build. This aligns the wire behavior with the official JS/Python SDKs, which send no Content-Type. (#8)
+
 ## [0.4.0] - 2026-05-11
 
 ### Changed
