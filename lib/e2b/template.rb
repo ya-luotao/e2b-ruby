@@ -273,7 +273,15 @@ module E2B
       def upload_file(template, file_name:, url:, resolve_symlinks:, source_location: nil)
         tarball = build_tar_archive(template, file_name, resolve_symlinks: resolve_symlinks)
         response = Faraday.put(url) do |req|
-          req.headers["Content-Type"] = "application/octet-stream"
+          # E2B returns a GCS V2 signed URL whose StringToSign carries
+          # an *empty* Content-Type. The signed value must match the
+          # value we send, so we set it explicitly to "" — neither
+          # "application/octet-stream" (signature mismatch on the
+          # signed Content-Type line) nor omitting the header (Faraday
+          # then defaults to "application/x-www-form-urlencoded",
+          # same mismatch). GCS returns 403 SignatureDoesNotMatch in
+          # both other cases.
+          req.headers["Content-Type"] = ""
           req.body = tarball
         end
 

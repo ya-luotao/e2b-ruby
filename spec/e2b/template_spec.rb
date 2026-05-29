@@ -620,6 +620,44 @@ RSpec.describe E2B::Template do
     end
   end
 
+  describe ".upload_file" do
+    it "sends Content-Type: '' so the request matches GCS's empty signed Content-Type" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "app.rb"), "puts 'hello'\n")
+        template = described_class.new(file_context_path: dir).from_base_image.copy("app.rb", "/app/")
+
+        upload_url = "https://upload.example.test/template"
+        stub = stub_request(:put, upload_url).with(
+          headers: { "Content-Type" => "" }
+        ).to_return(status: 200)
+
+        described_class.send(:upload_file, template, file_name: "app.rb",
+                                                     url: upload_url, resolve_symlinks: false)
+
+        expect(stub).to have_been_requested
+      end
+    end
+
+    # Regression guard: without this header, GCS rejects the PUT
+    # with 403 SignatureDoesNotMatch. Sending the default Faraday
+    # Content-Type ("application/x-www-form-urlencoded") or the
+    # previous hardcoded "application/octet-stream" both fail —
+    # any non-empty value will break uploads.
+    it "raises FileUploadError when the upload fails" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "app.rb"), "puts 'hi'\n")
+        template = described_class.new(file_context_path: dir).from_base_image.copy("app.rb", "/app/")
+
+        stub_request(:put, "https://upload.example.test/x").to_return(status: 403, body: "<Error/>")
+
+        expect do
+          described_class.send(:upload_file, template, file_name: "app.rb",
+                                                       url: "https://upload.example.test/x", resolve_symlinks: false)
+        end.to raise_error(E2B::FileUploadError, /Failed to upload file: 403/)
+      end
+    end
+  end
+
   describe ".build_in_background" do
     it "requests, uploads, and triggers template builds" do
       Dir.mktmpdir do |dir|
