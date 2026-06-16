@@ -98,4 +98,45 @@ RSpec.describe E2B::Services::EnvdHttpClient do
       expect(messages).to eq([body])
     end
   end
+
+  def rpc_response(status:, body:, headers: {})
+    described_class::RpcResponse.new(status: status, body: body, headers: headers)
+  end
+
+  describe "RpcResponse#success?" do
+    it "is true for 2xx and false otherwise" do
+      expect(rpc_response(status: 204, body: nil).success?).to be(true)
+      expect(rpc_response(status: 500, body: nil).success?).to be(false)
+    end
+  end
+
+  describe "#handle_error mapping" do
+    it "maps status codes to the matching error classes" do
+      {
+        401 => E2B::AuthenticationError,
+        403 => E2B::AuthenticationError,
+        404 => E2B::NotFoundError,
+        429 => E2B::RateLimitError,
+        500 => E2B::E2BError
+      }.each do |status, klass|
+        expect { client.send(:handle_error, rpc_response(status: status, body: {})) }
+          .to raise_error(klass) { |error| expect(error.status_code).to eq(status) }
+      end
+    end
+
+    it "extracts the message from a JSON body and carries headers" do
+      resp = rpc_response(status: 404, body: { "message" => "missing sandbox" }, headers: { "x" => "y" })
+      expect { client.send(:handle_error, resp) }
+        .to raise_error(E2B::NotFoundError, "missing sandbox") { |error| expect(error.headers).to eq("x" => "y") }
+    end
+  end
+
+  describe "#extract_error_message" do
+    it "prefers message, then error, then a string body, then a generic fallback" do
+      expect(client.send(:extract_error_message, rpc_response(status: 400, body: { "message" => "m" }))).to eq("m")
+      expect(client.send(:extract_error_message, rpc_response(status: 400, body: { "error" => "e" }))).to eq("e")
+      expect(client.send(:extract_error_message, rpc_response(status: 400, body: "raw"))).to eq("raw")
+      expect(client.send(:extract_error_message, rpc_response(status: 400, body: nil))).to eq("HTTP 400 error")
+    end
+  end
 end

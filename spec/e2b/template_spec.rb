@@ -395,7 +395,7 @@ RSpec.describe E2B::Template do
       expect do
         template.copy("../secrets.txt", "/app/")
       end.to raise_error(E2B::TemplateError) { |error|
-        expect(error.message).to match(/path escapes the context directory/)
+        expect(error.message).to include("path escapes the context directory")
         expect(error.source_location).to include(__FILE__)
         expect(error.backtrace).to eq([error.source_location])
       }
@@ -407,7 +407,7 @@ RSpec.describe E2B::Template do
       expect do
         template.to_dockerfile
       end.to raise_error(E2B::TemplateError) { |error|
-        expect(error.message).to match(/Cannot convert template built from another template to Dockerfile/)
+        expect(error.message).to include("Cannot convert template built from another template to Dockerfile")
         expect(error.source_location).to include(__FILE__)
       }
     end
@@ -513,7 +513,7 @@ RSpec.describe E2B::Template do
       expect do
         template.add_mcp_server("exa")
       end.to raise_error(E2B::BuildError) { |error|
-        expect(error.message).to match(/MCP servers can only be added to mcp-gateway template/)
+        expect(error.message).to include("MCP servers can only be added to mcp-gateway template")
         expect(error.source_location).to include(__FILE__)
       }
     end
@@ -886,7 +886,7 @@ RSpec.describe E2B::Template do
       expect do
         described_class.new.from_dockerfile(dockerfile)
       end.to raise_error(E2B::TemplateError) { |error|
-        expect(error.message).to match(/Multi-stage Dockerfiles are not supported/)
+        expect(error.message).to include("Multi-stage Dockerfiles are not supported")
         expect(error.source_location).to include(__FILE__)
       }
     end
