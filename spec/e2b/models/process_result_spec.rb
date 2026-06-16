@@ -39,6 +39,16 @@ RSpec.describe E2B::Models::ProcessResult do
       expect(result.stderr).to eq("oops")
       expect(result.exit_code).to eq(7)
     end
+
+    it "returns an empty, successful result for non-Hash input" do
+      [nil, "oops", [1, 2]].each do |bad|
+        result = described_class.from_connect_response(bad)
+        expect(result).to be_a(described_class)
+        expect(result.stdout).to eq("")
+        expect(result.exit_code).to eq(0)
+        expect(result).to be_success
+      end
+    end
   end
 
   describe ".parse_exit_code" do

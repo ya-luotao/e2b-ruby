@@ -42,7 +42,9 @@ module E2B
       # @param data [Hash] Connect RPC response data
       # @return [ProcessResult]
       def self.from_connect_response(data)
-        return from_hash(data) unless data.is_a?(Hash)
+        # Defensive: any non-Hash input (nil, String, Array) cannot be a Connect
+        # response, so return an empty result rather than crashing in from_hash.
+        return new unless data.is_a?(Hash)
 
         stdout = data[:stdout] || data["stdout"] || ""
         stderr = data[:stderr] || data["stderr"] || ""
