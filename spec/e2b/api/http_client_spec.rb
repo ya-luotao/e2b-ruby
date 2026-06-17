@@ -117,6 +117,44 @@ RSpec.describe E2B::API::HttpClient do
     end
   end
 
+  describe "#post" do
+    it "sends a JSON body and parses the JSON response" do
+      stub_request(:post, "#{base_url}/sandboxes")
+        .with(body: { templateID: "base" }.to_json)
+        .to_return(
+          status: 201,
+          body: '{"sandboxID":"sbx_new"}',
+          headers: { "Content-Type" => "application/json" }
+        )
+
+      expect(client.post("/sandboxes", body: { templateID: "base" })).to eq("sandboxID" => "sbx_new")
+    end
+
+    it "omits the request body when none is given" do
+      stub_request(:post, "#{base_url}/sandboxes/sbx_1/pause")
+        .to_return(status: 204, body: "")
+
+      client.post("/sandboxes/sbx_1/pause")
+
+      expect(a_request(:post, "#{base_url}/sandboxes/sbx_1/pause")
+        .with { |req| req.body.nil? || req.body.empty? }).to have_been_made
+    end
+  end
+
+  describe "#put" do
+    it "sends a JSON body via PUT" do
+      stub_request(:put, "#{base_url}/templates/abc")
+        .with(body: { alias: "latest" }.to_json)
+        .to_return(
+          status: 200,
+          body: '{"ok":true}',
+          headers: { "Content-Type" => "application/json" }
+        )
+
+      expect(client.put("/templates/abc", body: { alias: "latest" })).to eq("ok" => true)
+    end
+  end
+
   describe "#delete" do
     it "sends JSON bodies when provided" do
       stub_request(:delete, "#{base_url}/templates/tags")
