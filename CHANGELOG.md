@@ -4,6 +4,8 @@ All notable changes to the E2B Ruby SDK will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-06-17
+
 ### Fixed
 
 - **`ProcessResult.from_connect_response` no longer raises on non-Hash input.** The defensive guard delegated `nil`/`String`/`Array` arguments to `from_hash`, which then indexed them with string keys and raised `TypeError`/`NoMethodError`. It now returns an empty, successful result for any non-Hash input.
