@@ -139,4 +139,229 @@ RSpec.describe E2B::Services::EnvdHttpClient do
       expect(client.send(:extract_error_message, rpc_response(status: 400, body: nil))).to eq("HTTP 400 error")
     end
   end
+
+  # Frame one or more JSON strings into a binary Connect envelope stream, the
+  # wire format handle_rpc_response decodes.
+  def connect_stream(*messages)
+    body = "".b
+    messages.each { |m| body << "\x00".b << [m.bytesize].pack("N") << m.b }
+    body
+  end
+
+  describe "#handle_rpc_response" do
+    it "decodes Data events, parses the End exit code, and collects every event" do
+      body = connect_stream(
+        %({"event":{"Data":{"stdout":"#{Base64.strict_encode64("out")}","stderr":"#{Base64.strict_encode64("err")}"}}}),
+        %({"event":{"End":{"exitCode":0}}})
+      )
+
+      result = client.send(:handle_rpc_response, "process.Process", "Start") do
+        rpc_response(status: 200, body: body)
+      end
+
+      expect(result[:stdout]).to eq("out")
+      expect(result[:stderr]).to eq("err")
+      expect(result[:exit_code]).to eq(0)
+      expect(result[:events].size).to eq(2)
+    end
+
+    it "unwraps a result envelope and reads top-level stdout and a string exit code" do
+      body = connect_stream(
+        %({"result":{"stdout":"#{Base64.strict_encode64("hi")}","exitCode":"exit status 3"}})
+      )
+
+      result = client.send(:handle_rpc_response, "s", "m") { rpc_response(status: 200, body: body) }
+
+      expect(result[:stdout]).to eq("hi")
+      expect(result[:exit_code]).to eq(3)
+    end
+
+    it "decodes multibyte UTF-8 process output without raising" do
+      body = connect_stream(
+        %({"event":{"Data":{"stdout":"#{Base64.strict_encode64("héllo 日本語")}"}}})
+      )
+
+      result = client.send(:handle_rpc_response, "s", "m") { rpc_response(status: 200, body: body) }
+
+      expect(result[:stdout]).to eq("héllo 日本語")
+    end
+
+    it "skips unparseable frames instead of raising" do
+      body = connect_stream("{not json", %({"event":{"End":{"exitCode":0}}}))
+
+      result = client.send(:handle_rpc_response, "s", "m") { rpc_response(status: 200, body: body) }
+
+      expect(result[:exit_code]).to eq(0)
+      expect(result[:events].size).to eq(1)
+    end
+
+    it "returns an empty hash for an empty body" do
+      result = client.send(:handle_rpc_response, "s", "m") { rpc_response(status: 200, body: "") }
+      expect(result).to eq({})
+    end
+
+    it "raises a mapped error for a non-success response" do
+      expect do
+        client.send(:handle_rpc_response, "s", "m") { rpc_response(status: 404, body: { "message" => "nope" }) }
+      end.to raise_error(E2B::NotFoundError, "nope")
+    end
+  end
+
+  describe "#with_retry" do
+    it "returns the block result on success" do
+      expect(client.send(:with_retry, "op") { 42 }).to eq(42)
+    end
+
+    it "retries transient network errors, then succeeds" do
+      allow(client).to receive(:sleep) # avoid real 2**n backoff waits
+      attempts = 0
+
+      result = client.send(:with_retry, "op") do
+        attempts += 1
+        raise Errno::ECONNRESET if attempts < 3
+
+        "ok"
+      end
+
+      expect(result).to eq("ok")
+      expect(attempts).to eq(3)
+    end
+
+    it "raises after exhausting retries" do
+      allow(client).to receive(:sleep)
+
+      expect do
+        client.send(:with_retry, "op", max_retries: 2) { raise Net::ReadTimeout }
+      end.to raise_error(E2B::E2BError, /failed after 2 retries/)
+    end
+
+    it "does not retry when abort_if is true (observable side effects already happened)" do
+      calls = 0
+
+      expect do
+        client.send(:with_retry, "op", abort_if: -> { true }) do
+          calls += 1
+          raise Errno::ECONNRESET
+        end
+      end.to raise_error(E2B::E2BError, /failed after partial response/)
+
+      expect(calls).to eq(1)
+    end
+
+    it "does not retry when max_retries is 0 (non-idempotent /Start)" do
+      expect do
+        client.send(:with_retry, "op", max_retries: 0) { raise EOFError }
+      end.to raise_error(E2B::E2BError, /failed after 0 retries/)
+    end
+
+    it "propagates errors it does not classify as transient" do
+      expect { client.send(:with_retry, "op") { raise ArgumentError, "boom" } }
+        .to raise_error(ArgumentError, "boom")
+    end
+  end
+
+  describe "#resolve_proxy" do
+    around do |example|
+      keys = %w[no_proxy NO_PROXY http_proxy HTTP_PROXY https_proxy HTTPS_PROXY]
+      saved = ENV.to_hash.slice(*keys)
+      keys.each { |k| ENV.delete(k) }
+      begin
+        example.run
+      ensure
+        keys.each { |k| ENV.delete(k) }
+        saved.each { |k, v| ENV[k] = v }
+      end
+    end
+
+    let(:https_url) { URI.parse("https://49983-sbx.e2b.app/path") }
+
+    it "returns nil when no proxy is configured" do
+      expect(client.send(:resolve_proxy, https_url)).to be_nil
+    end
+
+    it "returns the https proxy URI for an https URL" do
+      ENV["https_proxy"] = "http://proxy.local:3128"
+      proxy = client.send(:resolve_proxy, https_url)
+      expect(proxy.host).to eq("proxy.local")
+      expect(proxy.port).to eq(3128)
+    end
+
+    it "bypasses the proxy when the host suffix matches no_proxy" do
+      ENV["https_proxy"] = "http://proxy.local:3128"
+      ENV["no_proxy"] = "e2b.app"
+      expect(client.send(:resolve_proxy, https_url)).to be_nil
+    end
+
+    it "bypasses the proxy for a wildcard no_proxy" do
+      ENV["https_proxy"] = "http://proxy.local:3128"
+      ENV["no_proxy"] = "*"
+      expect(client.send(:resolve_proxy, https_url)).to be_nil
+    end
+
+    it "returns nil for an unparseable proxy URL" do
+      client # build the Faraday connection before poisoning the proxy env var
+      ENV["https_proxy"] = "http://["
+      expect(client.send(:resolve_proxy, https_url)).to be_nil
+    end
+  end
+
+  describe "#normalize_path" do
+    it "strips leading slashes so paths join cleanly onto the base URL" do
+      expect(client.send(:normalize_path, "/files")).to eq("files")
+      expect(client.send(:normalize_path, "///a/b")).to eq("a/b")
+      expect(client.send(:normalize_path, "files")).to eq("files")
+    end
+  end
+
+  describe "#apply_custom_headers" do
+    it "sets each header on the request and is a no-op for nil" do
+      request = Net::HTTP::Post.new("/")
+      client.send(:apply_custom_headers, request, { "X-Foo" => "bar" })
+      expect(request["X-Foo"]).to eq("bar")
+
+      expect { client.send(:apply_custom_headers, request, nil) }.not_to raise_error
+    end
+  end
+
+  describe "#handle_response" do
+    # A minimal stand-in for the Faraday::Response that handle_response inspects.
+    def faraday_like(success:, body:, headers: {}, status: 200)
+      resp = Object.new
+      resp.define_singleton_method(:success?) { success }
+      resp.define_singleton_method(:body) { body }
+      resp.define_singleton_method(:headers) { headers }
+      resp.define_singleton_method(:status) { status }
+      resp
+    end
+
+    it "parses a JSON string body" do
+      resp = faraday_like(success: true, body: '{"ok":true}', headers: { "content-type" => "application/json" })
+      expect(client.send(:handle_response) { resp }).to eq("ok" => true)
+    end
+
+    it "returns a non-JSON string body unchanged" do
+      resp = faraday_like(success: true, body: "plain text", headers: { "content-type" => "text/plain" })
+      expect(client.send(:handle_response) { resp }).to eq("plain text")
+    end
+
+    it "returns an already-parsed Hash body as-is" do
+      resp = faraday_like(success: true, body: { "x" => 1 })
+      expect(client.send(:handle_response) { resp }).to eq("x" => 1)
+    end
+
+    it "raises a mapped error for an unsuccessful response" do
+      resp = faraday_like(success: false, body: { "message" => "bad" }, status: 500)
+      expect { client.send(:handle_response) { resp } }.to raise_error(E2B::E2BError, "bad")
+    end
+
+    it "maps Faraday::TimeoutError to E2B::TimeoutError" do
+      expect { client.send(:handle_response) { raise Faraday::TimeoutError } }
+        .to raise_error(E2B::TimeoutError)
+    end
+
+    it "maps Faraday::ConnectionFailed to E2B::E2BError" do
+      expect { client.send(:handle_response) { raise Faraday::ConnectionFailed, "nope" } }
+        .to raise_error(E2B::E2BError, /Connection to sandbox failed/)
+    end
+  end
 end

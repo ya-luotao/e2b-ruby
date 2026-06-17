@@ -70,4 +70,53 @@ RSpec.describe E2B::Services::BaseService do
       expect(build_service(envd_version: "weird").recursive_watch?).to be(true)
     end
   end
+
+  describe "envd client construction and proxy bypass" do
+    around do |example|
+      saved = ENV.to_hash.slice("no_proxy", "NO_PROXY")
+      ENV.delete("no_proxy")
+      ENV.delete("NO_PROXY")
+      begin
+        example.run
+      ensure
+        ENV.delete("no_proxy")
+        ENV.delete("NO_PROXY")
+        saved.each { |k, v| ENV[k] = v }
+      end
+    end
+
+    it "builds an EnvdHttpClient and memoizes it" do
+      svc = build_service
+      client = svc.send(:envd_client)
+
+      expect(client).to be_a(E2B::Services::EnvdHttpClient)
+      expect(svc.send(:envd_client)).to be(client)
+    end
+
+    it "appends the sandbox domain to no_proxy/NO_PROXY so envd traffic bypasses the proxy" do
+      build_service.send(:ensure_no_proxy_for_domain!, "e2b.app")
+
+      expect(ENV.fetch("no_proxy", nil)).to include("e2b.app")
+      expect(ENV.fetch("NO_PROXY", nil)).to include("e2b.app")
+    end
+
+    it "does not duplicate a domain that is already present" do
+      ENV["no_proxy"] = "e2b.app"
+      build_service.send(:ensure_no_proxy_for_domain!, "e2b.app")
+
+      expect(ENV.fetch("no_proxy", nil)).to eq("e2b.app")
+    end
+
+    it "appends onto an existing no_proxy list" do
+      ENV["no_proxy"] = "localhost"
+      build_service.send(:ensure_no_proxy_for_domain!, "e2b.app")
+
+      expect(ENV.fetch("no_proxy", nil)).to eq("localhost,e2b.app")
+    end
+
+    it "is a no-op for a blank domain" do
+      build_service.send(:ensure_no_proxy_for_domain!, "")
+      expect(ENV.fetch("no_proxy", nil)).to be_nil
+    end
+  end
 end
