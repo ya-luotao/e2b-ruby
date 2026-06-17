@@ -4,6 +4,15 @@ All notable changes to the E2B Ruby SDK will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ProcessResult.from_connect_response` no longer raises on non-Hash input.** The defensive guard delegated `nil`/`String`/`Array` arguments to `from_hash`, which then indexed them with string keys and raised `TypeError`/`NoMethodError`. It now returns an empty, successful result for any non-Hash input.
+
+### Internal
+
+- **Substantially expanded the test suite (131 → 278 examples).** Added unit specs for previously untested units: `DockerfileParser`, all response models (`ProcessResult`, `SandboxInfo`, `EntryInfo`/`FilesystemEvent`, and the template/build models), `Configuration`, `SandboxHelpers`, the paginators, the error hierarchy, `WatchHandle`, `ReadyCmd`, `DefaultBuildLogger`, the `BaseService`/`EnvdHttpClient` auth-header and error-mapping helpers, `LiveStreamable`, and the synchronous/error paths of `CommandHandle`.
+- **Added opt-in SimpleCov coverage** via `COVERAGE=true bundle exec rake spec`, with branch coverage and a minimum-coverage gate configured in `spec/spec_helper.rb`.
+
 ## [0.4.1] - 2026-05-29
 
 ### Fixed

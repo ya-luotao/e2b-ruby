@@ -14,6 +14,7 @@ Ruby SDK for the E2B sandbox API. The public surface lives under the `E2B` modul
 
 - `bundle exec rake` — runs `rake spec` then `rake rubocop` (the default task). Use this as the gate before commits.
 - `bundle exec rake spec` — RSpec only (prefer over bare `rspec` so the bundle is honored).
+- `COVERAGE=true bundle exec rake spec` — same run with SimpleCov instrumentation (branch coverage on). Writes an HTML report to `coverage/` and fails if it drops below the floor in `spec/spec_helper.rb` (currently line 80% / branch 58%). Coverage is opt-in so single-file runs aren't failed by the gate; raise the floor as coverage improves.
 - `bundle exec rake rubocop` — style + RSpec cops; config in `.rubocop.yml`. Pre-existing waivers live in `.rubocop_todo.yml` — tighten by deleting an entry there and fixing the underlying violations, not by silencing them in the main config.
 - `bundle exec rubocop -a` — apply safe autofixes (no `-A`; unsafe corrections are reviewed by hand).
 - `bundle exec rake build` — build the gem into `pkg/`.
